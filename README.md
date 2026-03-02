@@ -2,7 +2,7 @@
   
   # Center-valbot
   
-  [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/pJ8JkSBnMB)
+  [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/qDEHKVbUgz)
 </div>
 
 Centre colorbot is a computer-vision mouse aiming system using HSV color detection with MAKCU hardware. Supports NDI, UDP, and Capture Card input, offering customizable sensitivity, smoothing, FOV settings, and anti-smoke filtering for precise 2-PC aiming workflows.
