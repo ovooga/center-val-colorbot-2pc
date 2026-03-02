@@ -1,0 +1,5 @@
+{
+    "version": "2.4.2",
+    "release_date": "2026-02-20",
+    "changelog": "Version 2.4.2: Updated default configuration file from default.json to default_Centre.json, updated .gitignore to allow default_Centre.json tracking, and updated documentation. Version 2.4.1: Enhanced RGB Trigger processing and configuration, added custom RGB value support for personalized trigger settings. Version 2.4.0: Added Ferrum API support for keyboard and mouse control, enhanced UI with additional features, improved RGB Trigger functionality, and updated configuration options. Previous versions include: Config tab enhancements with DEL action and clipboard-driven import, ADS FOV feature with toggle/hold modes, config export/import functionality, HSV preview with eyedropper tool, and comprehensive mouse module refactoring."
+}
