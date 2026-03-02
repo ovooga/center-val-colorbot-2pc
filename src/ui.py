@@ -1,0 +1,7872 @@
+﻿"""
+UI æ¨¡çµ„ - Ultra Minimalist é¢¨æ ¼
+è™•ç†ä¸»è¦–çª—ã€åˆ†é å…§å®¹èˆ‡è¨­å®šäº’å‹• (GUI layer)
+"""
+import customtkinter as ctk
+import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog
+import ctypes
+from ctypes import wintypes
+import os
+import json
+import cv2
+import threading
+import time
+import webbrowser
+from PIL import Image
+from functools import partial
+
+from src.utils.config import config
+from src.capture.capture_service import CaptureService
+from src.utils.mouse_input import MouseInputMonitor
+from src.utils.debug_logger import get_recent_logs, clear_logs, get_log_count, log_print
+from src.utils.updater import get_update_checker
+from src.ui_hsv_preview import HsvPreviewWindow
+
+# --- Theme constants (Dark panel style inspired by reference) ---
+THEME_PRESETS = {
+    "neon": {
+        "COLOR_BG": "#000000",
+        "COLOR_SIDEBAR": "#050505",
+        "COLOR_SURFACE": "#0D0D0D",
+        "COLOR_CARD_BG": "#111111",
+        "COLOR_CARD_HEADER": "#171717",
+        "COLOR_ACCENT": "#FFFFFF",
+        "COLOR_ACCENT_HOVER": "#D9D9D9",
+        "COLOR_TEXT": "#F5F5F5",
+        "COLOR_TEXT_DIM": "#A6A6A6",
+        "COLOR_BORDER": "#2F2F2F",
+        "COLOR_DANGER": "#8A8A8A",
+        "COLOR_SUCCESS": "#FFFFFF",
+        "COLOR_NAV_ACTIVE_BG": "#F2F2F2",
+        "COLOR_NAV_ACTIVE_TEXT": "#050505",
+        "COLOR_NAV_HOVER_BG": "#242424",
+        "COLOR_MENU_GHOST": "#7A7A7A",
+        "COLOR_INPUT_BG": "#141414",
+        "COLOR_INPUT_BUTTON": "#2A2A2A",
+        "COLOR_SWITCH_OFF": "#3A3A3A",
+        "COLOR_SWITCH_ON": "#F0F0F0",
+        "COLOR_SWITCH_KNOB": "#FFFFFF",
+        "COLOR_SCROLLBAR": "#4D4D4D",
+        "FONT_MAIN": ("Segoe UI", 11),
+        "FONT_BOLD": ("Segoe UI", 11, "bold"),
+        "FONT_TITLE": ("Segoe UI", 18, "bold"),
+    },
+    "classic": {
+        "COLOR_BG": "#000000",
+        "COLOR_SIDEBAR": "#050505",
+        "COLOR_SURFACE": "#0D0D0D",
+        "COLOR_CARD_BG": "#111111",
+        "COLOR_CARD_HEADER": "#171717",
+        "COLOR_ACCENT": "#FFFFFF",
+        "COLOR_ACCENT_HOVER": "#D9D9D9",
+        "COLOR_TEXT": "#F5F5F5",
+        "COLOR_TEXT_DIM": "#A6A6A6",
+        "COLOR_BORDER": "#2F2F2F",
+        "COLOR_DANGER": "#8A8A8A",
+        "COLOR_SUCCESS": "#FFFFFF",
+        "COLOR_NAV_ACTIVE_BG": "#F2F2F2",
+        "COLOR_NAV_ACTIVE_TEXT": "#050505",
+        "COLOR_NAV_HOVER_BG": "#242424",
+        "COLOR_MENU_GHOST": "#7A7A7A",
+        "COLOR_INPUT_BG": "#141414",
+        "COLOR_INPUT_BUTTON": "#2A2A2A",
+        "COLOR_SWITCH_OFF": "#3A3A3A",
+        "COLOR_SWITCH_ON": "#F0F0F0",
+        "COLOR_SWITCH_KNOB": "#FFFFFF",
+        "COLOR_SCROLLBAR": "#4D4D4D",
+        "FONT_MAIN": ("Segoe UI", 11),
+        "FONT_BOLD": ("Segoe UI", 11, "bold"),
+        "FONT_TITLE": ("Segoe UI", 18, "bold"),
+    },
+}
+
+
+def _apply_theme_preset(theme_name):
+    theme = THEME_PRESETS.get(theme_name, THEME_PRESETS["neon"])
+    for key, value in theme.items():
+        globals()[key] = value
+
+
+_apply_theme_preset("neon")
+
+Centre_CONFIG_COMMENT_KEY = "_comment"
+Centre_CONFIG_COMMENT_VALUE = "This is Centre colorBot config."
+APP_FIXED_WIDTH = 800
+APP_FIXED_HEIGHT = 700
+CF_HDROP = 15
+DRAG_QUERY_FILE_COUNT = 0xFFFFFFFF
+GMEM_MOVEABLE = 0x0002
+GMEM_ZEROINIT = 0x0040
+GHND = GMEM_MOVEABLE | GMEM_ZEROINIT
+
+
+class DROPFILES(ctypes.Structure):
+    _fields_ = [
+        ("pFiles", wintypes.DWORD),
+        ("pt_x", wintypes.LONG),
+        ("pt_y", wintypes.LONG),
+        ("fNC", wintypes.BOOL),
+        ("fWide", wintypes.BOOL),
+    ]
+
+
+if os.name == "nt":
+    KERNEL32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    USER32 = ctypes.WinDLL("user32", use_last_error=True)
+    SHELL32 = ctypes.WinDLL("shell32", use_last_error=True)
+
+    KERNEL32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    KERNEL32.GlobalAlloc.restype = wintypes.HANDLE
+    KERNEL32.GlobalLock.argtypes = [wintypes.HANDLE]
+    KERNEL32.GlobalLock.restype = wintypes.LPVOID
+    KERNEL32.GlobalUnlock.argtypes = [wintypes.HANDLE]
+    KERNEL32.GlobalUnlock.restype = wintypes.BOOL
+    KERNEL32.GlobalFree.argtypes = [wintypes.HANDLE]
+    KERNEL32.GlobalFree.restype = wintypes.HANDLE
+
+    USER32.OpenClipboard.argtypes = [wintypes.HWND]
+    USER32.OpenClipboard.restype = wintypes.BOOL
+    USER32.EmptyClipboard.argtypes = []
+    USER32.EmptyClipboard.restype = wintypes.BOOL
+    USER32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    USER32.SetClipboardData.restype = wintypes.HANDLE
+    USER32.GetClipboardData.argtypes = [wintypes.UINT]
+    USER32.GetClipboardData.restype = wintypes.HANDLE
+    USER32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+    USER32.IsClipboardFormatAvailable.restype = wintypes.BOOL
+    USER32.CloseClipboard.argtypes = []
+    USER32.CloseClipboard.restype = wintypes.BOOL
+
+    SHELL32.DragQueryFileW.argtypes = [wintypes.HANDLE, wintypes.UINT, wintypes.LPWSTR, wintypes.UINT]
+    SHELL32.DragQueryFileW.restype = wintypes.UINT
+else:
+    KERNEL32 = None
+    USER32 = None
+    SHELL32 = None
+
+BUTTONS = {
+    0: 'Left Mouse Button',
+    1: 'Right Mouse Button',
+    2: 'Middle Mouse Button',
+    3: 'Side Mouse 4 Button',
+    4: 'Side Mouse 5 Button'
+}
+BUTTON_NAME_TO_IDX = {name: idx for idx, name in BUTTONS.items()}
+
+ADS_KEY_DISPLAY_TO_BINDING = {
+    "Right Mouse Button": "Right Mouse Button",
+    "Left Mouse Button": "Left Mouse Button",
+    "Middle Mouse Button": "Middle Mouse Button",
+    "Side Mouse 4 Button": "Side Mouse 4 Button",
+    "Side Mouse 5 Button": "Side Mouse 5 Button",
+    "Left Shift": "LSHIFT",
+    "Right Shift": "RSHIFT",
+    "Left Ctrl": "LCONTROL",
+    "Right Ctrl": "RCONTROL",
+    "Left Alt": "LMENU",
+    "Right Alt": "RMENU",
+    "Space": "SPACE",
+    "E": "E",
+    "Q": "Q",
+    "F": "F",
+    "R": "R",
+    "C": "C",
+    "V": "V",
+    "X": "X",
+    "Z": "Z",
+    "W": "W",
+    "A": "A",
+    "S": "S",
+    "D": "D",
+}
+
+ADS_KEY_BINDING_TO_DISPLAY = {
+    str(binding).upper(): display for display, binding in ADS_KEY_DISPLAY_TO_BINDING.items()
+}
+
+BIND_CAPTURE_KEY_TOKENS = (
+    ["SPACE", "TAB", "ENTER", "ESCAPE", "LSHIFT", "RSHIFT", "LCONTROL", "RCONTROL", "LMENU", "RMENU", "UP", "DOWN", "LEFT", "RIGHT"]
+    + [chr(code) for code in range(ord("A"), ord("Z") + 1)]
+    + [str(num) for num in range(10)]
+    + [f"F{i}" for i in range(1, 13)]
+)
+
+ADS_KEY_TYPE_DISPLAY_TO_VALUE = {
+    "Hold": "hold",
+    "Toggle": "toggle",
+}
+
+ADS_KEY_TYPE_VALUE_TO_DISPLAY = {
+    str(value).lower(): display for display, value in ADS_KEY_TYPE_DISPLAY_TO_VALUE.items()
+}
+
+TRIGGER_TYPE_DISPLAY = {
+    "current": "Classic Trigger",
+    "rgb": "RGB Trigger",
+}
+
+RGB_TRIGGER_PROFILE_DISPLAY = {
+    "red": "Red",
+    "yellow": "Yellow",
+    "purple": "Purple",
+    "same_as_hsv": "Same as HSV",
+    "custom": "Custom",
+}
+
+TRIGGER_STRAFE_MODE_DISPLAY = {
+    "off": "Off",
+    "auto": "Auto Strafe",
+    "manual_wait": "Manual Wait",
+}
+
+class ViewerApp(ctk.CTk):
+    """ä¸»æ‡‰ç”¨ç¨‹å¼ UI (Ultra Minimalist)ã€‚"""
+    
+    def __init__(self, tracker, capture_service):
+        super().__init__()
+        
+        # --- Window setup ---
+        self.title("Centre colorBot")
+        self.geometry(f"{APP_FIXED_WIDTH}x{APP_FIXED_HEIGHT}")
+        self.minsize(APP_FIXED_WIDTH, APP_FIXED_HEIGHT)
+        self.maxsize(APP_FIXED_WIDTH, APP_FIXED_HEIGHT)
+        self._legacy_ui_mode = False
+        config.legacy_ui_mode = False
+        _apply_theme_preset("neon")
+        ctk.set_appearance_mode("Dark")
+        
+        # æ³¨æ„: è‹¥å•Ÿç”¨ overrideredirect(True)ï¼Œç³»çµ±æ¡†ç·šèˆ‡ taskbar è¡Œç‚ºå¯èƒ½ä¸åŒ
+        # If you need normal window decorations, keep it commented out.
+        self.overrideredirect(True)
+        self._is_maximized = False
+        self._restore_geometry = self.geometry()
+        self._taskbar_style_applied = False
+        
+        self.configure(fg_color=COLOR_BG)
+        
+        # é è¨­ä¸ç½®é ‚ï¼Œé¿å…å½±éŸ¿å…¶ä»– app/focus
+        self.attributes('-topmost', False)
+        self.bind("<Map>", self._on_window_map)
+        self.after(50, self._ensure_taskbar_icon)
+        
+        # --- Core services ---
+        self.tracker = tracker
+        self.capture = capture_service
+        
+        # --- Mouse input monitor ---
+        self.mouse_input_monitor = MouseInputMonitor()
+        
+        # --- Update Checker ---
+        self.update_checker = get_update_checker()
+        self._update_check_in_progress = False
+        
+        # --- Debug tab state (init once to preserve tab-switch state) ---
+        self.debug_mouse_input_var = tk.BooleanVar(value=False)
+        
+        # --- UI runtime state ---
+        self._slider_widgets = {}
+        self._checkbox_vars = {}
+        self._option_widgets = {}
+        self._active_tab_name = "General"
+        self._clipboard_import_poll_interval_ms = 1200
+        self._clipboard_import_last_declined_signature = None
+        self._clipboard_import_last_declined_config_fingerprint = None
+        self._clipboard_import_imported_signatures = set()
+        self._clipboard_import_prompt_open = False
+        raw_section_states = getattr(config, "ui_collapsible_states", {})
+        self._collapsible_section_states = (
+            dict(raw_section_states) if isinstance(raw_section_states, dict) else {}
+        )
+        self.current_frame = None
+        
+        # å•Ÿå‹•æ™‚ä½¿ç”¨ config.capture_mode
+        init_mode = getattr(config, "capture_mode", "NDI")
+        self.capture.set_mode(init_mode)
+        init_mode = self.capture.mode
+        self.capture_method_var = tk.StringVar(value=init_mode)
+        
+        # --- Capture control cache (restore from config) ---
+        self.saved_udp_ip = getattr(config, "udp_ip", "127.0.0.1")
+        self.saved_udp_port = getattr(config, "udp_port", "1234")
+        self.saved_ndi_source = getattr(config, "last_ndi_source", None)
+        self.saved_mouse_api = getattr(config, "mouse_api", "Serial")
+        self.saved_net_ip = getattr(config, "net_ip", "192.168.2.188")
+        self.saved_net_port = getattr(config, "net_port", "6234")
+        self.saved_net_uuid = getattr(config, "net_uuid", getattr(config, "net_mac", ""))
+        self.saved_kmboxa_vid_pid = str(
+            getattr(config, "kmboxa_vid_pid", f"{getattr(config, 'kmboxa_vid', 0)}/{getattr(config, 'kmboxa_pid', 0)}")
+        )
+        self.saved_serial_port_mode = str(getattr(config, "serial_port_mode", "Auto"))
+        self.saved_serial_port = str(getattr(config, "serial_port", ""))
+        self.saved_serial_auto_switch_4m = bool(getattr(config, "serial_auto_switch_4m", False))
+        self.saved_arduino_port = str(getattr(config, "arduino_port", ""))
+        self.saved_arduino_baud = str(getattr(config, "arduino_baud", 115200))
+        self.saved_makv2_port = getattr(config, "makv2_port", "")
+        self.saved_makv2_baud = str(getattr(config, "makv2_baud", 4000000))
+        self.saved_dhz_ip = getattr(config, "dhz_ip", "192.168.2.188")
+        self.saved_dhz_port = str(getattr(config, "dhz_port", "5000"))
+        self.saved_dhz_random = str(getattr(config, "dhz_random", 0))
+        self.saved_ferrum_device_path = str(getattr(config, "ferrum_device_path", ""))
+        self.saved_ferrum_connection_type = str(getattr(config, "ferrum_connection_type", "auto"))
+        self.saved_auto_connect_mouse_api = bool(getattr(config, "auto_connect_mouse_api", False))
+        self._mouse_api_connecting = False
+        self._mouse_api_connect_job_id = 0
+        self._mouse_api_connect_timeout_ms = 12000
+        self._serial_baud_switching = False
+        
+        # --- Build layout ---
+        self._build_layout()
+        
+        # --- Periodic jobs ---
+        self.after(100, self._process_source_updates)
+        self.after(500, self._update_connection_status_loop)
+        self.after(200, self._load_initial_config)
+        self.after(self._clipboard_import_poll_interval_ms, self._poll_clipboard_config_import)
+        self.after(300, self._update_performance_stats)  # æ›´æ–°æ•ˆèƒ½çµ±è¨ˆ Performance stats
+        self.after(50, self._update_mouse_input_debug)  # æ›´æ–°æ»‘é¼ è¼¸å…¥ç›£æŽ§ Mouse input debug
+        self.after(100, self._update_debug_log)  # æ›´æ–° Debug log
+
+    def _build_layout(self):
+        """å»ºç«‹ä¸»ç‰ˆé¢ï¼štitle bar + sidebar + content areaã€‚"""
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+        
+        # æ¨™é¡Œåˆ— Title bar
+        self._build_title_bar()
+
+        self.workspace_shell = ctk.CTkFrame(
+            self,
+            fg_color=COLOR_BG,
+            corner_radius=14,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        self.workspace_shell.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self.workspace_shell.grid_rowconfigure(0, weight=1)
+        self.workspace_shell.grid_columnconfigure(1, weight=1)
+
+        # å´æ¬„å°Žè¦½ Sidebar
+        self._build_sidebar(parent=self.workspace_shell)
+
+        # å…§å®¹å€ Content frame
+        self.content_frame = ctk.CTkScrollableFrame(
+            self.workspace_shell,
+            fg_color=COLOR_CARD_BG,
+            corner_radius=14,
+            border_width=1,
+            border_color=COLOR_BORDER,
+            scrollbar_button_color=COLOR_SCROLLBAR,
+            scrollbar_button_hover_color=COLOR_TEXT_DIM,
+        )
+        self.content_frame.grid(row=0, column=1, sticky="nsew", padx=(6, 8), pady=8)
+        
+        self._show_general_tab()
+
+    def _build_title_bar(self):
+        """å»ºç«‹æ¨™é¡Œåˆ— (title bar)ã€‚"""
+        self.title_bar = ctk.CTkFrame(
+            self,
+            height=58,
+            fg_color=COLOR_SURFACE,
+            corner_radius=0,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        self.title_bar.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 6))
+        self.title_bar.grid_propagate(False)
+
+        title_container = ctk.CTkFrame(self.title_bar, fg_color="transparent")
+        title_container.pack(side="left", fill="y", padx=(14, 0))
+
+        logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "centre.jpg")
+        if not os.path.exists(logo_path):
+            logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Centre.jpg")
+        self.logo_lbl = None
+        if os.path.exists(logo_path):
+            try:
+                logo_image = Image.open(logo_path)
+                logo_image = logo_image.resize((20, 20), Image.Resampling.LANCZOS)
+                logo_ctk = ctk.CTkImage(light_image=logo_image, dark_image=logo_image, size=(20, 20))
+                self.logo_lbl = ctk.CTkLabel(
+                    title_container,
+                    image=logo_ctk, text=""
+                )
+                self.logo_lbl.pack(side="left", padx=(0, 10))
+            except Exception as e:
+                log_print(f"[UI] Failed to load logo: {e}")
+
+        header_stack = ctk.CTkFrame(title_container, fg_color="transparent")
+        header_stack.pack(side="left", fill="y")
+        title_lbl = ctk.CTkLabel(
+            header_stack,
+            text="CENTRE CONTROL PANEL",
+            font=("Segoe UI", 12, "bold"),
+            text_color=COLOR_TEXT,
+        )
+        title_lbl.pack(anchor="w", pady=(5, 0))
+
+        info_row = ctk.CTkFrame(header_stack, fg_color="transparent")
+        info_row.pack(anchor="w", pady=(0, 4))
+        current_version = self.update_checker.get_current_version()
+        self.version_lbl = ctk.CTkLabel(
+            info_row,
+            text=f"v{current_version}",
+            font=("Segoe UI", 8),
+            text_color=COLOR_TEXT_DIM,
+            anchor="w",
+        )
+        self.version_lbl.pack(side="left")
+
+        self.tab_context_label = ctk.CTkLabel(
+            info_row,
+            text="GENERAL / WORKSPACE",
+            font=("Segoe UI", 8, "bold"),
+            text_color=COLOR_ACCENT,
+            anchor="w",
+        )
+        self.tab_context_label.pack(side="left", padx=(10, 0))
+
+        self.update_btn = None
+
+        action_row = ctk.CTkFrame(self.title_bar, fg_color="transparent")
+        action_row.pack(side="right", padx=(0, 12), pady=9)
+
+        mode_chip = ctk.CTkLabel(
+            action_row,
+            text="MONO MODE",
+            text_color=COLOR_NAV_ACTIVE_TEXT,
+            fg_color=COLOR_NAV_ACTIVE_BG,
+            corner_radius=12,
+            width=88,
+            height=28,
+            font=("Segoe UI", 8, "bold"),
+        )
+        mode_chip.pack(side="left", padx=(0, 10))
+
+        self.minimize_btn = ctk.CTkButton(
+            action_row,
+            text="-",
+            width=30,
+            height=28,
+            fg_color=COLOR_INPUT_BG,
+            hover_color=COLOR_NAV_HOVER_BG,
+            text_color=COLOR_TEXT_DIM,
+            font=("Segoe UI", 11, "bold"),
+            command=self._on_minimize,
+            corner_radius=10,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        self.minimize_btn.pack(side="left", padx=(0, 5))
+
+        self.maximize_btn = ctk.CTkButton(
+            action_row,
+            text="[]",
+            width=30,
+            height=28,
+            fg_color=COLOR_INPUT_BG,
+            hover_color=COLOR_NAV_HOVER_BG,
+            text_color=COLOR_TEXT_DIM,
+            font=("Segoe UI", 9, "bold"),
+            command=self._toggle_maximize,
+            corner_radius=10,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        self.maximize_btn.pack(side="left", padx=(0, 5))
+
+        close_btn = ctk.CTkButton(
+            action_row,
+            text="x",
+            width=30,
+            height=28,
+            fg_color=COLOR_INPUT_BG,
+            hover_color=COLOR_NAV_HOVER_BG,
+            text_color=COLOR_TEXT_DIM,
+            font=("Segoe UI", 10, "bold"),
+            command=self._on_close,
+            corner_radius=10,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        close_btn.pack(side="left")
+
+        self.title_bar.bind("<Button-1>", self.start_move)
+        self.title_bar.bind("<B1-Motion>", self.do_move)
+        for draggable in (title_lbl, self.version_lbl, self.tab_context_label, mode_chip):
+            draggable.bind("<Button-1>", self.start_move)
+            draggable.bind("<B1-Motion>", self.do_move)
+        if self.logo_lbl:
+            self.logo_lbl.bind("<Button-1>", self.start_move)
+            self.logo_lbl.bind("<B1-Motion>", self.do_move)
+
+    def _build_sidebar(self, parent=None):
+        """å»ºç«‹å´é‚Šæ¬„ï¼šnavigation + status widgetsã€‚"""
+        sidebar_width = 224
+        sidebar_parent = parent if parent is not None else self
+        self.sidebar = ctk.CTkFrame(
+            sidebar_parent,
+            width=sidebar_width,
+            fg_color=COLOR_SIDEBAR,
+            corner_radius=12,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        if parent is not None:
+            self.sidebar.grid(row=0, column=0, sticky="ns", padx=8, pady=8)
+        else:
+            self.sidebar.grid(row=1, column=0, sticky="ns", padx=8, pady=8)
+        self.sidebar.grid_propagate(False)
+        
+        # åˆ†éš”ç·š Separator
+        sep_color = COLOR_BORDER
+        sep = ctk.CTkFrame(self.sidebar, width=1, fg_color=sep_color)
+        sep.pack(side="right", fill="y")
+
+        if not self._legacy_ui_mode:
+            brand = ctk.CTkFrame(
+                self.sidebar,
+                fg_color=COLOR_SURFACE,
+                corner_radius=12,
+                border_width=1,
+                border_color=COLOR_BORDER,
+            )
+            brand.pack(fill="x", padx=8, pady=(8, 8))
+            ctk.CTkLabel(
+                brand,
+                text="MISSION NAV",
+                font=("Segoe UI", 13, "bold"),
+                text_color=COLOR_TEXT,
+                anchor="w",
+            ).pack(anchor="w", padx=8, pady=(7, 0))
+            ctk.CTkLabel(
+                brand,
+                text="reworked 800x700 layout",
+                font=("Segoe UI", 8),
+                text_color=COLOR_TEXT_DIM,
+                anchor="w",
+            ).pack(anchor="w", padx=8, pady=(0, 7))
+
+        # å°Žè¦½å®¹å™¨ Navigation container
+        nav_container = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        nav_padx = 8
+        nav_pady = (0, 6)
+        nav_container.pack(fill="x", padx=nav_padx, pady=nav_pady)
+        
+        self.nav_buttons = {}
+        self.nav_indicators = {}
+
+        if self._legacy_ui_mode:
+            tabs = [
+                ("General", self._show_general_tab),
+                ("Main Aimbot", self._show_aimbot_tab),
+                ("Sec Aimbot", self._show_sec_aimbot_tab),
+                ("Trigger", self._show_tb_tab),
+                ("RCS", self._show_rcs_tab),
+                ("Config", self._show_config_tab),
+                ("Debug", self._show_debug_tab),
+            ]
+            for text, cmd in tabs:
+                btn = self._create_nav_btn_legacy(nav_container, text, cmd)
+                self.nav_buttons[text] = btn
+                btn.pack(pady=2, fill="x")
+        else:
+            self._add_sidebar_group_label(nav_container, "Mission")
+            self._add_nav_item(nav_container, "General", self._show_general_tab, icon=">")
+            self._add_nav_item(nav_container, "Config", self._show_config_tab, icon=">")
+
+            self._add_sidebar_group_label(nav_container, "Combat Engine")
+            self._add_nav_item(nav_container, "Main Aimbot", self._show_aimbot_tab, icon=">")
+            self._add_nav_item(nav_container, "Sec Aimbot", self._show_sec_aimbot_tab, icon=">")
+            self._add_nav_item(nav_container, "Trigger", self._show_tb_tab, icon=">")
+            self._add_nav_item(nav_container, "RCS", self._show_rcs_tab, icon=">")
+
+            self._add_sidebar_group_label(nav_container, "Maintenance")
+            self._add_nav_item(nav_container, "Debug", self._show_debug_tab, icon=">")
+
+        self._set_nav_active(self._active_tab_name)
+            
+        # å´æ¬„åº•éƒ¨å€å¡Š Bottom section
+        bottom_frame = ctk.CTkFrame(
+            self.sidebar,
+            fg_color=COLOR_SURFACE,
+            corner_radius=12,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        bottom_frame.pack(side="bottom", fill="x", padx=8, pady=(4, 8))
+        
+        self.theme_btn = None
+        self.ui_style_btn = None
+        ctk.CTkLabel(
+            bottom_frame,
+            text="Telemetry",
+            text_color=COLOR_ACCENT,
+            font=("Segoe UI", 9, "bold"),
+            anchor="w",
+        ).pack(fill="x", padx=8, pady=(8, 6))
+        
+        # æ•ˆèƒ½è³‡è¨Š Performance labels
+        self.fps_label = ctk.CTkLabel(
+            bottom_frame, 
+            text="FPS: --", 
+            text_color=COLOR_TEXT_DIM, 
+            font=("Segoe UI", 8), 
+            anchor="w"
+        )
+        self.fps_label.pack(fill="x", padx=8, pady=2)
+        
+        self.decode_delay_label = ctk.CTkLabel(
+            bottom_frame, 
+            text="Decode: -- ms", 
+            text_color=COLOR_TEXT_DIM, 
+            font=("Segoe UI", 8), 
+            anchor="w"
+        )
+        self.decode_delay_label.pack(fill="x", padx=8, pady=2)
+        
+        self.total_delay_label = ctk.CTkLabel(
+            bottom_frame, 
+            text="Delay: -- ms", 
+            text_color=COLOR_TEXT_DIM, 
+            font=("Segoe UI", 8), 
+            anchor="w"
+        )
+        self.total_delay_label.pack(fill="x", padx=8, pady=2)
+        
+        # ç‹€æ…‹æŒ‡ç¤ºå™¨ Status indicator
+        self.status_indicator = ctk.CTkLabel(
+            bottom_frame,
+            text="Status: Idle",
+            text_color=COLOR_TEXT_DIM,
+            font=("Segoe UI", 10),
+            anchor="w",
+            height=18,
+        )
+        self.status_indicator.pack(fill="x", padx=8)
+
+        self.hardware_type_label = ctk.CTkLabel(
+            bottom_frame,
+            text=f"Hardware: {getattr(config, 'mouse_api', 'Serial')}",
+            text_color=COLOR_TEXT_DIM,
+            font=("Segoe UI", 9),
+            anchor="w",
+        )
+        self.hardware_type_label.pack(fill="x", padx=8, pady=(4, 0))
+
+        self.hardware_conn_label = ctk.CTkLabel(
+            bottom_frame,
+            text="Hardware Status: Disconnected",
+            text_color=COLOR_DANGER,
+            font=("Segoe UI", 9),
+            anchor="w",
+        )
+        self.hardware_conn_label.pack(fill="x", padx=8)
+
+        self._hardware_info_expanded = False
+        self.hardware_details_toggle = ctk.CTkButton(
+            bottom_frame,
+            text="Device Details",
+            command=self._toggle_hardware_info_details,
+            fg_color=COLOR_INPUT_BG,
+            hover_color=COLOR_NAV_HOVER_BG,
+            text_color=COLOR_TEXT_DIM,
+            font=("Segoe UI", 9),
+            anchor="w",
+            height=24,
+            corner_radius=8,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        self.hardware_details_toggle.pack(fill="x", padx=8, pady=(2, 0))
+
+        self.hardware_details_label = ctk.CTkLabel(
+            bottom_frame,
+            text="",
+            text_color=COLOR_TEXT_DIM,
+            font=("Segoe UI", 9),
+            anchor="w",
+            justify="left",
+        )
+        self._update_hardware_status_ui()
+        
+        # è¨­å®šæŒ‰éˆ• Settings button
+        settings_btn = ctk.CTkButton(
+            bottom_frame,
+            text="Preferences",
+            command=self._open_settings_window,
+            fg_color=COLOR_INPUT_BG,
+            hover_color=COLOR_NAV_HOVER_BG,
+            text_color=COLOR_TEXT,
+            font=("Segoe UI", 9, "bold"),
+            anchor="w",
+            height=28,
+            corner_radius=8,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        settings_btn.pack(fill="x", padx=8, pady=(10, 8))
+
+    def _set_status_indicator(self, text, text_color=COLOR_TEXT_DIM):
+        if not hasattr(self, "status_indicator") or not self.status_indicator.winfo_exists():
+            return
+        msg = str(text).replace("\n", " ").strip()
+        max_chars = 34
+        if len(msg) > max_chars:
+            msg = msg[: max_chars - 3] + "..."
+        self.status_indicator.configure(text=msg, text_color=text_color)
+
+    def _create_nav_btn(self, parent, text, command, icon=">"):
+        nav_label_map = {
+            "General": "System Overview",
+            "Config": "Profile Manager",
+            "Main Aimbot": "Primary Aimbot",
+            "Sec Aimbot": "Secondary Aimbot",
+            "RCS": "Recoil Control",
+            "Trigger": "Trigger System",
+            "Debug": "Diagnostics",
+        }
+        label = nav_label_map.get(text, text)
+        return ctk.CTkButton(
+            parent,
+            text=f" {icon}  {label}",
+            height=34,
+            fg_color=COLOR_INPUT_BG,
+            text_color=COLOR_TEXT,
+            hover_color=COLOR_NAV_HOVER_BG,
+            anchor="w",
+            font=("Segoe UI", 9, "bold"),
+            command=lambda: self._handle_nav_click(text, command),
+            corner_radius=12,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+
+    def _create_nav_btn_legacy(self, parent, text, command):
+        return ctk.CTkButton(
+            parent,
+            text=text,
+            height=32,
+            fg_color=COLOR_SURFACE,
+            text_color=COLOR_TEXT,
+            hover_color=COLOR_NAV_HOVER_BG,
+            anchor="w",
+            font=FONT_MAIN,
+            command=lambda: self._handle_nav_click(text, command),
+            corner_radius=8,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+
+    def _add_sidebar_group_label(self, parent, text):
+        ctk.CTkLabel(
+            parent,
+            text=text.upper(),
+            font=("Segoe UI", 9, "bold"),
+            text_color=COLOR_TEXT_DIM,
+            anchor="w",
+        ).pack(fill="x", pady=(8, 4))
+
+    def _add_sidebar_hint_item(self, parent, text):
+        ctk.CTkLabel(
+            parent,
+            text=f"    {text}",
+            font=("Segoe UI", 11),
+            text_color=COLOR_MENU_GHOST,
+            anchor="w",
+        ).pack(fill="x", pady=(0, 3))
+
+    def _add_nav_item(self, parent, text, command, icon=">"):
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", pady=3)
+
+        indicator = ctk.CTkFrame(row, width=3, height=34, fg_color="transparent", corner_radius=2)
+        indicator.pack(side="left", fill="y", padx=(0, 5))
+
+        btn = self._create_nav_btn(row, text, command, icon=icon)
+        btn.pack(side="left", fill="x", expand=True)
+
+        self.nav_buttons[text] = btn
+        self.nav_indicators[text] = indicator
+        return btn
+
+    def _set_nav_active(self, active_text):
+        for btn_text, btn in self.nav_buttons.items():
+            indicator = self.nav_indicators.get(btn_text)
+            if btn_text == active_text:
+                btn.configure(
+                    text_color=COLOR_NAV_ACTIVE_TEXT,
+                    fg_color=COLOR_NAV_ACTIVE_BG,
+                    border_color=COLOR_NAV_ACTIVE_BG,
+                )
+                if indicator is not None:
+                    indicator.configure(fg_color=COLOR_NAV_ACTIVE_BG)
+            else:
+                inactive_bg = COLOR_INPUT_BG
+                inactive_border = COLOR_BORDER
+                btn.configure(text_color=COLOR_TEXT, fg_color=inactive_bg, border_color=inactive_border)
+                if indicator is not None:
+                    indicator.configure(fg_color="transparent")
+        if hasattr(self, "tab_context_label") and self.tab_context_label.winfo_exists():
+            context_map = {
+                "General": "GENERAL",
+                "Config": "PROFILE WORKSPACE",
+                "Main Aimbot": "PRIMARY AIM",
+                "Sec Aimbot": "SECONDARY AIM",
+                "RCS": "RECOIL CONTROL",
+                "Trigger": "TRIGGER LOGIC",
+                "Debug": "DIAGNOSTICS",
+            }
+            context_text = context_map.get(str(active_text), str(active_text).upper())
+            self.tab_context_label.configure(text=f"{context_text} / WORKSPACE")
+
+    def _handle_nav_click(self, text, command):
+        self._active_tab_name = str(text)
+        self._set_nav_active(self._active_tab_name)
+        command()
+
+    def _clear_content(self):
+        self._cancel_binding_capture()
+        for widget in self.content_frame.winfo_children():
+            widget.destroy()
+        # Clear widget maps to avoid stale destroyed references during config apply.
+        self._option_widgets = {}
+        self._slider_widgets = {}
+        if hasattr(self, "_range_slider_widgets"):
+            self._range_slider_widgets = {}
+
+    def _toggle_theme(self):
+        ctk.set_appearance_mode("Dark")
+        log_print("[UI] Theme fixed to Green Dark mode.")
+
+    def _toggle_ui_style(self):
+        self._legacy_ui_mode = False
+        config.legacy_ui_mode = False
+        log_print("[UI] UI style is fixed to Green mode.")
+
+    def _rebuild_layout_for_ui_style(self):
+        tab_name = str(getattr(self, "_active_tab_name", "General"))
+        self._cancel_binding_capture()
+
+        for attr in ("title_bar", "workspace_shell", "sidebar", "content_frame"):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                try:
+                    widget.destroy()
+                except Exception:
+                    pass
+
+        _apply_theme_preset("neon")
+        self.configure(fg_color=COLOR_BG)
+        self._build_layout()
+
+        tab_map = {
+            "General": self._show_general_tab,
+            "Main Aimbot": self._show_aimbot_tab,
+            "Sec Aimbot": self._show_sec_aimbot_tab,
+            "Trigger": self._show_tb_tab,
+            "RCS": self._show_rcs_tab,
+            "Config": self._show_config_tab,
+            "Debug": self._show_debug_tab,
+        }
+        tab_fn = tab_map.get(tab_name)
+        if tab_fn is not None and tab_name != "General":
+            self._handle_nav_click(tab_name, tab_fn)
+
+    # --- å„åˆ†é å…§å®¹ Tabs ---
+
+    def _show_general_tab(self):
+        self._active_tab_name = "General"
+        self._clear_content()
+        self._add_title("System Control Matrix")
+        general_tabs = self._create_category_tabs(["Core Ops", "Capture IO", "Targeting", "Input Guard"])
+        tab_system = general_tabs["Core Ops"]
+        tab_capture = general_tabs["Capture IO"]
+        tab_vision = general_tabs["Targeting"]
+        tab_input = general_tabs["Input Guard"]
+
+        # -- HARDWARE API (collapsible) --
+        sec_hardware = self._create_collapsible_section(tab_system, "Hardware API", initially_open=True)
+        self.mouse_api_option = self._add_option_row_in_frame(
+            sec_hardware,
+            "Input API",
+            ["Serial (Makcu)", "Arduino", "SendInput", "Net", "KmboxA", "MakV2", "MakV2Binary", "DHZ"],
+            self._on_mouse_api_changed,
+        )
+        self.var_auto_connect_mouse_api = tk.BooleanVar(value=bool(getattr(config, "auto_connect_mouse_api", False)))
+        self._add_switch_in_frame(
+            sec_hardware,
+            "Auto Connect Mouse API On Startup",
+            self.var_auto_connect_mouse_api,
+            self._on_auto_connect_mouse_api_changed,
+        )
+        current_mouse_api = getattr(config, "mouse_api", "Serial")
+        current_mouse_api_norm = str(current_mouse_api).strip().lower()
+        if current_mouse_api_norm == "net":
+            current_mouse_api = "Net"
+        elif current_mouse_api_norm in ("kmboxa", "kmboxa_api", "kmboxaapi", "kma", "kmboxa-api"):
+            current_mouse_api = "KmboxA"
+        elif current_mouse_api_norm == "dhz":
+            current_mouse_api = "DHZ"
+        elif current_mouse_api_norm in ("makv2binary", "makv2_binary", "makv2-binary", "binary"):
+            current_mouse_api = "MakV2Binary"
+        elif current_mouse_api_norm in ("makv2", "mak_v2", "mak-v2"):
+            current_mouse_api = "MakV2"
+        elif current_mouse_api_norm == "arduino":
+            current_mouse_api = "Arduino"
+        elif current_mouse_api_norm in ("sendinput", "win32", "win32api", "win32_sendinput", "win32-sendinput"):
+            current_mouse_api = "SendInput"
+        elif current_mouse_api_norm == "ferrum":
+            current_mouse_api = "Ferrum"
+        else:
+            current_mouse_api = "Serial (Makcu)"
+        self.mouse_api_option.set(current_mouse_api)
+        self.saved_mouse_api = current_mouse_api
+        serial_mode = str(getattr(config, "serial_port_mode", self.saved_serial_port_mode)).strip().lower()
+        self.saved_serial_port_mode = "Manual" if serial_mode == "manual" else "Auto"
+        self.saved_serial_port = str(getattr(config, "serial_port", self.saved_serial_port))
+        self.saved_serial_auto_switch_4m = bool(
+            getattr(config, "serial_auto_switch_4m", self.saved_serial_auto_switch_4m)
+        )
+        self.saved_net_ip = getattr(config, "net_ip", self.saved_net_ip)
+        self.saved_net_port = getattr(config, "net_port", self.saved_net_port)
+        self.saved_net_uuid = getattr(config, "net_uuid", getattr(config, "net_mac", self.saved_net_uuid))
+        self.saved_kmboxa_vid_pid = str(
+            getattr(
+                config,
+                "kmboxa_vid_pid",
+                f"{getattr(config, 'kmboxa_vid', 0)}/{getattr(config, 'kmboxa_pid', 0)}",
+            )
+        )
+        self.saved_arduino_port = str(getattr(config, "arduino_port", self.saved_arduino_port))
+        self.saved_arduino_baud = str(getattr(config, "arduino_baud", self.saved_arduino_baud))
+        self.saved_makv2_port = getattr(config, "makv2_port", self.saved_makv2_port)
+        self.saved_makv2_baud = str(getattr(config, "makv2_baud", self.saved_makv2_baud))
+        self.saved_dhz_ip = getattr(config, "dhz_ip", self.saved_dhz_ip)
+        self.saved_dhz_port = str(getattr(config, "dhz_port", self.saved_dhz_port))
+        self.saved_dhz_random = str(getattr(config, "dhz_random", self.saved_dhz_random))
+        self.saved_ferrum_device_path = str(getattr(config, "ferrum_device_path", self.saved_ferrum_device_path))
+        self.saved_ferrum_connection_type = str(getattr(config, "ferrum_connection_type", self.saved_ferrum_connection_type))
+        self.saved_auto_connect_mouse_api = bool(getattr(config, "auto_connect_mouse_api", self.saved_auto_connect_mouse_api))
+
+        self._add_spacer_in_frame(sec_hardware)
+        self.hardware_content_frame = ctk.CTkFrame(sec_hardware, fg_color="transparent")
+        self.hardware_content_frame.pack(fill="x", pady=5)
+        self._update_mouse_api_ui()
+        
+        # éˆ¹â‚¬éˆ¹â‚¬ CAPTURE CONTROLS (collapsible) éˆ¹â‚¬éˆ¹â‚¬
+        sec_capture = self._create_collapsible_section(tab_capture, "Capture Controls", initially_open=True)
+        
+        # Capture Method Selection
+        self.capture_method_var.set(self.capture.mode)
+        # é“é›ç¼“ option menu
+        self.capture_method_option = self._add_option_row_in_frame(sec_capture, "Method", ["NDI", "UDP", "UDP v1.5", "CaptureCard", "MSS"], self._on_capture_method_changed)
+        # æ¤¤îˆšç´¡ç‘·î… ç–†é£è·ºå¢ éŠ?
+        self.capture_method_option.set(self.capture.mode)
+        
+        self._add_spacer_in_frame(sec_capture)
+        
+        # Dynamic Capture Content Frame
+        self.capture_content_frame = ctk.CTkFrame(sec_capture, fg_color="transparent")
+        self.capture_content_frame.pack(fill="x", pady=5)
+        
+        self._update_capture_ui()
+
+        # éˆ¹â‚¬éˆ¹â‚¬ SETTINGS (collapsible) éˆ¹â‚¬éˆ¹â‚¬
+        sec_settings = self._create_collapsible_section(tab_vision, "Settings", initially_open=True)
+        
+        # In-Game Sensitivity (é—‹æ„¯Å 0.235, ç»¡å‹«æ¹‡ 0.1-20)
+        self._add_slider_in_frame(sec_settings, "In-Game Sensitivity", "in_game_sens", 0.1, 20, 
+                        float(getattr(config, "in_game_sens", 0.235)), 
+                        self._on_config_in_game_sens_changed, is_float=True)
+        
+        self._add_spacer_in_frame(sec_settings)
+        
+        self.color_option = self._add_option_row_in_frame(
+            sec_settings,
+            "Target Color",
+            ["yellow", "purple", "red", "custom"],
+            self._on_color_selected,
+        )
+        self._option_widgets["color"] = self.color_option
+        # ç‘·î… ç–†é£è·ºå¢ éŠ?
+        current_color = getattr(config, "color", "yellow")
+        self.color_option.set(current_color)
+        
+        # éˆ¹â‚¬éˆ¹â‚¬ Custom HSV Settings (collapsible, only show when custom is selected) éˆ¹â‚¬éˆ¹â‚¬
+        # é“é›ç¼“ container æµ ãƒ¤ç©¶éŽºÑƒåŸ—æ¤¤îˆœãš/é—…è¾«æ£Œé”›å œç¬‰é‘·î„å«Š packé”›?
+        self.custom_hsv_section, self.custom_hsv_container = self._create_collapsible_section(
+            tab_vision, "Custom HSV", initially_open=True, auto_pack=False
+        )
+        if current_color == "custom":
+            self.custom_hsv_container.pack(fill="x", pady=(5, 0))
+        self._hsv_preview_btn_frame = ctk.CTkFrame(self.custom_hsv_section, fg_color="transparent")
+        self._hsv_preview_btn_frame.pack(fill="x", pady=(0, 8))
+        ctk.CTkButton(
+            self._hsv_preview_btn_frame,
+            text="HSV Filter Preview",
+            height=30,
+            fg_color=COLOR_SURFACE,
+            hover_color=COLOR_BORDER,
+            text_color=COLOR_ACCENT,
+            font=FONT_BOLD,
+            corner_radius=4,
+            border_width=1,
+            border_color=COLOR_BORDER,
+            command=self._open_hsv_preview,
+        ).pack(fill="x", padx=14)
+        
+        # HSV Min Values
+        self._add_subtitle_in_frame(self.custom_hsv_section, "HSV MIN")
+        self._add_slider_in_frame(self.custom_hsv_section, "H Min", "custom_hsv_min_h", 0, 179,
+                                  int(getattr(config, "custom_hsv_min_h", 0)),
+                                  lambda v: self._on_custom_hsv_changed("custom_hsv_min_h", v))
+        self._add_slider_in_frame(self.custom_hsv_section, "S Min", "custom_hsv_min_s", 0, 255,
+                                  int(getattr(config, "custom_hsv_min_s", 0)),
+                                  lambda v: self._on_custom_hsv_changed("custom_hsv_min_s", v))
+        self._add_slider_in_frame(self.custom_hsv_section, "V Min", "custom_hsv_min_v", 0, 255,
+                                  int(getattr(config, "custom_hsv_min_v", 0)),
+                                  lambda v: self._on_custom_hsv_changed("custom_hsv_min_v", v))
+        
+        self._add_spacer_in_frame(self.custom_hsv_section)
+        
+        # HSV Max Values
+        self._add_subtitle_in_frame(self.custom_hsv_section, "HSV MAX")
+        self._add_slider_in_frame(self.custom_hsv_section, "H Max", "custom_hsv_max_h", 0, 179,
+                                  int(getattr(config, "custom_hsv_max_h", 179)),
+                                  lambda v: self._on_custom_hsv_changed("custom_hsv_max_h", v))
+        self._add_slider_in_frame(self.custom_hsv_section, "S Max", "custom_hsv_max_s", 0, 255,
+                                  int(getattr(config, "custom_hsv_max_s", 255)),
+                                  lambda v: self._on_custom_hsv_changed("custom_hsv_max_s", v))
+        self._add_slider_in_frame(self.custom_hsv_section, "V Max", "custom_hsv_max_v", 0, 255,
+                                  int(getattr(config, "custom_hsv_max_v", 255)),
+                                  lambda v: self._on_custom_hsv_changed("custom_hsv_max_v", v))
+        
+        # éè§„æ‘Žé£è·ºå¢ é–¬å‘Šæ°æ¤¤îˆœãš/é—…è¾«æ£Œ Custom HSV é—â‚¬æ¿‰?
+
+        self._update_custom_hsv_visibility()
+        
+        # éˆ¹â‚¬éˆ¹â‚¬ DETECTION PARAMETERS (collapsible) éˆ¹â‚¬éˆ¹â‚¬
+        detection_tooltip_text = (
+            "- Merge Distance: Controls the distance threshold for merging detection rectangles. "
+            "Higher values merge more (may cause false merges), lower values merge less (may create multiple targets). "
+            "Recommended: 4-12 (default 12)\n\n"
+            "- Min Contour Points: Filters contours with too few points (usually noise). "
+            "Higher values filter more strictly (may miss small targets), lower values filter more loosely (may include more noise). "
+            "Recommended: 3-10 (default 5)"
+        )
+        sec_detection = self._create_collapsible_section(
+            tab_vision,
+            "Detection Parameters", 
+            initially_open=False,
+            tooltip_text=detection_tooltip_text
+        )
+        
+        # Merge Distance
+        self._add_slider_in_frame(sec_detection, "Merge Distance", "detection_merge_distance", 0, 18,
+                                  int(getattr(config, "detection_merge_distance", 12)),
+                                  self._on_detection_merge_distance_changed)
+        
+        self._add_spacer_in_frame(sec_detection)
+        
+        # Min Contour Points
+        self._add_slider_in_frame(sec_detection, "Min Contour Points", "detection_min_contour_points", 3, 100,
+                                  int(getattr(config, "detection_min_contour_points", 5)),
+                                  self._on_detection_min_contour_points_changed)
+        
+        # MOUSE LOCK (collapsible)
+        mouse_lock_tooltip_text = (
+            "- Lock Main Aimbot X-Axis: Blocks physical mouse movement on X-axis when Main Aimbot is active. "
+            "Only aimbot-controlled movements will be applied.\n\n"
+            "- Lock Main Aimbot Y-Axis: Blocks physical mouse movement on Y-axis when Main Aimbot is active. "
+            "Only aimbot-controlled movements will be applied.\n\n"
+            "- Lock Sec Aimbot X-Axis: Blocks physical mouse movement on X-axis when Sec Aimbot is active. "
+            "Only aimbot-controlled movements will be applied.\n\n"
+            "- Lock Sec Aimbot Y-Axis: Blocks physical mouse movement on Y-axis when Sec Aimbot is active. "
+            "Only aimbot-controlled movements will be applied.\n\n"
+            "Note: The lock will automatically release when the aimbot button is released or aimbot stops moving."
+        )
+        sec_mouse_lock = self._create_collapsible_section(
+            tab_input,
+            "Mouse Lock",
+            initially_open=False,
+            tooltip_text=mouse_lock_tooltip_text
+        )
+        
+        # Lock Main Aimbot X-Axis
+        if not hasattr(self, 'var_mouse_lock_main_x'):
+            self.var_mouse_lock_main_x = tk.BooleanVar(value=getattr(config, "mouse_lock_main_x", False))
+        self._add_switch_in_frame(sec_mouse_lock, "Lock Main Aimbot X-Axis", self.var_mouse_lock_main_x, self._on_mouse_lock_main_x_changed)
+        self._checkbox_vars["mouse_lock_main_x"] = self.var_mouse_lock_main_x
+        
+        # Lock Main Aimbot Y-Axis
+        if not hasattr(self, 'var_mouse_lock_main_y'):
+            self.var_mouse_lock_main_y = tk.BooleanVar(value=getattr(config, "mouse_lock_main_y", False))
+        self._add_switch_in_frame(sec_mouse_lock, "Lock Main Aimbot Y-Axis", self.var_mouse_lock_main_y, self._on_mouse_lock_main_y_changed)
+        self._checkbox_vars["mouse_lock_main_y"] = self.var_mouse_lock_main_y
+        
+        self._add_spacer_in_frame(sec_mouse_lock)
+        
+        # Lock Sec Aimbot X-Axis
+        if not hasattr(self, 'var_mouse_lock_sec_x'):
+            self.var_mouse_lock_sec_x = tk.BooleanVar(value=getattr(config, "mouse_lock_sec_x", False))
+        self._add_switch_in_frame(sec_mouse_lock, "Lock Sec Aimbot X-Axis", self.var_mouse_lock_sec_x, self._on_mouse_lock_sec_x_changed)
+        self._checkbox_vars["mouse_lock_sec_x"] = self.var_mouse_lock_sec_x
+        
+        # Lock Sec Aimbot Y-Axis
+        if not hasattr(self, 'var_mouse_lock_sec_y'):
+            self.var_mouse_lock_sec_y = tk.BooleanVar(value=getattr(config, "mouse_lock_sec_y", False))
+        self._add_switch_in_frame(sec_mouse_lock, "Lock Sec Aimbot Y-Axis", self.var_mouse_lock_sec_y, self._on_mouse_lock_sec_y_changed)
+        self._checkbox_vars["mouse_lock_sec_y"] = self.var_mouse_lock_sec_y
+        
+        # éˆ¹â‚¬éˆ¹â‚¬ BUTTON MASK (collapsible) éˆ¹â‚¬éˆ¹â‚¬
+        sec_button_mask = self._create_collapsible_section(tab_input, "Button Mask", initially_open=False)
+        
+        # Button Mask ç»ºä»‹æžŠé—‚?
+        if not hasattr(self, 'var_button_mask_enabled'):
+            self.var_button_mask_enabled = tk.BooleanVar(value=getattr(config, "button_mask_enabled", False))
+        
+        master_switch = ctk.CTkSwitch(
+            sec_button_mask,
+            text="Enable Button Mask",
+            variable=self.var_button_mask_enabled,
+            command=self._on_button_mask_enabled_changed,
+            fg_color=COLOR_SURFACE,
+            progress_color=COLOR_ACCENT,
+            button_color=COLOR_ACCENT,
+            button_hover_color=COLOR_ACCENT_HOVER,
+            text_color=COLOR_TEXT_DIM,
+            font=("Roboto", 11),
+            width=80,
+            height=20
+        )
+        master_switch.pack(fill="x", pady=(5, 10))
+        self._checkbox_vars["button_mask_enabled"] = self.var_button_mask_enabled
+        
+        # Grid for individual buttons
+        grid_frame = ctk.CTkFrame(sec_button_mask, fg_color="transparent")
+        grid_frame.pack(fill="x", pady=(0, 5))
+        
+        # Configure grid columns
+        grid_frame.grid_columnconfigure(0, weight=1)
+        grid_frame.grid_columnconfigure(1, weight=1)
+        grid_frame.grid_columnconfigure(2, weight=1)
+        
+        button_masks = [
+            ("L-Click", "mask_left_button", 0, 0),
+            ("R-Click", "mask_right_button", 0, 1),
+            ("M-Click", "mask_middle_button", 0, 2),
+            ("Side 4", "mask_side4_button", 1, 0),
+            ("Side 5", "mask_side5_button", 1, 1),
+        ]
+        
+        for label, key, row, col in button_masks:
+            var_name = f"var_{key}"
+            if not hasattr(self, var_name):
+                var = tk.BooleanVar(value=getattr(config, key, False))
+                setattr(self, var_name, var)
+            else:
+                var = getattr(self, var_name)
+            
+            # æµ£è·¨æ•¤é‡å¯¸å•Šç»±å‹­æ®‘ Switch æ£°ã„¦ç‰¸
+            btn_switch = ctk.CTkSwitch(
+                grid_frame,
+                text=label,
+                variable=var,
+                command=lambda k=key, v=var: self._on_button_mask_changed(k, v),
+                fg_color=COLOR_SURFACE,
+                progress_color=COLOR_ACCENT,
+                button_color=COLOR_ACCENT,
+                button_hover_color=COLOR_ACCENT_HOVER,
+                text_color=COLOR_TEXT_DIM,
+                font=("Roboto", 10),
+                height=18,
+                width=30, # Smaller switch width
+                switch_width=30,
+                switch_height=16
+            )
+            btn_switch.grid(row=row, column=col, sticky="w", padx=5, pady=6)
+            self._checkbox_vars[key] = var
+
+    def _update_mouse_api_ui(self):
+        """éè§„æ‘Žé–¬å‘Šæ°é¨å‹¬ç²¦æ¦§?API é‡å­˜æŸŠ Hardware API é—â‚¬æ¿‰å¨¿â‚¬?"""
+        if not hasattr(self, "hardware_content_frame") or not self.hardware_content_frame.winfo_exists():
+            return
+
+        for widget in self.hardware_content_frame.winfo_children():
+            widget.destroy()
+
+        mode = "Serial"
+        if hasattr(self, "mouse_api_option") and self.mouse_api_option.winfo_exists():
+            mode = self.mouse_api_option.get()
+        mode_norm = str(mode).strip().lower()
+        if mode_norm == "net":
+            mode = "Net"
+        elif mode_norm in ("kmboxa", "kmboxa_api", "kmboxaapi", "kma", "kmboxa-api"):
+            mode = "KmboxA"
+        elif mode_norm == "dhz":
+            mode = "DHZ"
+        elif mode_norm in ("makv2", "mak_v2", "mak-v2"):
+            mode = "MakV2"
+        elif mode_norm == "arduino":
+            mode = "Arduino"
+        elif mode_norm in ("sendinput", "win32", "win32api", "win32_sendinput", "win32-sendinput"):
+            mode = "SendInput"
+        elif mode_norm == "ferrum":
+            mode = "Ferrum"
+        elif mode_norm in ("serial (makcu)", "serial", "makcu"):
+            mode = "Serial"
+        else:
+            mode = "Serial"
+        self.saved_mouse_api = mode
+        config.mouse_api = mode
+
+        if mode == "Serial":
+            tip = ctk.CTkLabel(
+                self.hardware_content_frame,
+                text="Serial API (MAKCU/CH34x)",
+                font=("Roboto", 10),
+                text_color=COLOR_TEXT_DIM,
+            )
+            tip.pack(anchor="w", pady=(0, 8))
+
+            mode_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            mode_frame.pack(fill="x", pady=3)
+            ctk.CTkLabel(mode_frame, text="COM Mode", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.serial_mode_option = self._add_option_menu(
+                ["Auto", "Manual"],
+                self._on_serial_mode_selected,
+                parent=mode_frame,
+            )
+            self.serial_mode_option.pack(side="right")
+            current_serial_mode = "Manual" if str(self.saved_serial_port_mode).strip().lower() == "manual" else "Auto"
+            self.saved_serial_port_mode = current_serial_mode
+            self.serial_mode_option.set(current_serial_mode)
+
+            if current_serial_mode == "Manual":
+                port_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+                port_frame.pack(fill="x", pady=3)
+                ctk.CTkLabel(port_frame, text="COM Port", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+                self.serial_port_entry = ctk.CTkEntry(
+                    port_frame,
+                    fg_color=COLOR_SURFACE,
+                    border_width=0,
+                    text_color=COLOR_TEXT,
+                    width=170,
+                )
+                self.serial_port_entry.pack(side="right")
+                self.serial_port_entry.insert(0, self.saved_serial_port)
+                self.serial_port_entry.bind("<KeyRelease>", self._on_serial_port_changed)
+                self.serial_port_entry.bind("<FocusOut>", self._on_serial_port_changed)
+
+            self.var_serial_auto_switch_4m = tk.BooleanVar(value=bool(self.saved_serial_auto_switch_4m))
+            self._add_switch_in_frame(
+                self.hardware_content_frame,
+                "Auto Switch Serial to 4M On Startup",
+                self.var_serial_auto_switch_4m,
+                self._on_serial_auto_switch_4m_changed,
+            )
+
+            btn_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            btn_frame.pack(fill="x", pady=5)
+            self._add_text_button(btn_frame, "CONNECT SERIAL", lambda: self._connect_mouse_api("Serial")).pack(side="left")
+            self._add_text_button(btn_frame, "TEST MOVE", self._test_mouse_move).pack(side="left", padx=12)
+            self._add_text_button(btn_frame, "SWITCH TO 4M", self._switch_serial_to_4m).pack(side="left")
+            return
+
+        if mode == "Arduino":
+            tip = ctk.CTkLabel(
+                self.hardware_content_frame,
+                text="Arduino API (serial c/p/r/mX,Y newline protocol)",
+                font=("Roboto", 10),
+                text_color=COLOR_TEXT_DIM,
+            )
+            tip.pack(anchor="w", pady=(0, 8))
+
+            port_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            port_frame.pack(fill="x", pady=3)
+            ctk.CTkLabel(port_frame, text="COM Port (optional)", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.arduino_port_entry = ctk.CTkEntry(
+                port_frame,
+                fg_color=COLOR_SURFACE,
+                border_width=0,
+                text_color=COLOR_TEXT,
+                width=170,
+            )
+            self.arduino_port_entry.pack(side="right")
+            self.arduino_port_entry.insert(0, self.saved_arduino_port)
+            self.arduino_port_entry.bind("<KeyRelease>", self._on_arduino_port_changed)
+            self.arduino_port_entry.bind("<FocusOut>", self._on_arduino_port_changed)
+
+            baud_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            baud_frame.pack(fill="x", pady=3)
+            ctk.CTkLabel(baud_frame, text="Baud", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.arduino_baud_entry = ctk.CTkEntry(
+                baud_frame,
+                fg_color=COLOR_SURFACE,
+                border_width=0,
+                text_color=COLOR_TEXT,
+                width=170,
+            )
+            self.arduino_baud_entry.pack(side="right")
+            self.arduino_baud_entry.insert(0, self.saved_arduino_baud)
+            self.arduino_baud_entry.bind("<KeyRelease>", self._on_arduino_baud_changed)
+            self.arduino_baud_entry.bind("<FocusOut>", self._on_arduino_baud_changed)
+
+            btn_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            btn_frame.pack(fill="x", pady=8)
+            self._add_text_button(btn_frame, "CONNECT ARDUINO", lambda: self._connect_mouse_api("Arduino")).pack(side="left")
+            self._add_text_button(btn_frame, "TEST MOVE", self._test_mouse_move).pack(side="left", padx=12)
+            return
+
+        if mode == "SendInput":
+            tip = ctk.CTkLabel(
+                self.hardware_content_frame,
+                text="Win32 SendInput API (software injection, no COM needed)",
+                font=("Roboto", 10),
+                text_color=COLOR_TEXT_DIM,
+            )
+            tip.pack(anchor="w", pady=(0, 8))
+
+            sendinput_notice = ctk.CTkLabel(
+                self.hardware_content_frame,
+                text="For dual-PC streaming setups (e.g., Moonlight).",
+                font=("Roboto", 10, "bold"),
+                text_color=COLOR_DANGER,
+            )
+            sendinput_notice.pack(anchor="w", pady=(0, 8))
+
+            btn_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            btn_frame.pack(fill="x", pady=8)
+            self._add_text_button(btn_frame, "ENABLE SENDINPUT", lambda: self._connect_mouse_api("SendInput")).pack(side="left")
+            self._add_text_button(btn_frame, "TEST MOVE", self._test_mouse_move).pack(side="left", padx=12)
+            return
+
+        if mode == "MakV2":
+            tip = ctk.CTkLabel(
+                self.hardware_content_frame,
+                text="MakV2 API (ASCII km.* commands over serial)",
+                font=("Roboto", 10),
+                text_color=COLOR_TEXT_DIM,
+            )
+            tip.pack(anchor="w", pady=(0, 8))
+
+            port_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            port_frame.pack(fill="x", pady=3)
+            ctk.CTkLabel(port_frame, text="Port (optional)", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.makv2_port_entry = ctk.CTkEntry(port_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=170)
+            self.makv2_port_entry.pack(side="right")
+            self.makv2_port_entry.insert(0, self.saved_makv2_port)
+            self.makv2_port_entry.bind("<KeyRelease>", self._on_makv2_port_changed)
+            self.makv2_port_entry.bind("<FocusOut>", self._on_makv2_port_changed)
+
+            baud_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            baud_frame.pack(fill="x", pady=3)
+            ctk.CTkLabel(baud_frame, text="Baud", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.makv2_baud_entry = ctk.CTkEntry(baud_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=170)
+            self.makv2_baud_entry.pack(side="right")
+            self.makv2_baud_entry.insert(0, self.saved_makv2_baud)
+            self.makv2_baud_entry.bind("<KeyRelease>", self._on_makv2_baud_changed)
+            self.makv2_baud_entry.bind("<FocusOut>", self._on_makv2_baud_changed)
+
+            btn_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            btn_frame.pack(fill="x", pady=8)
+            self._add_text_button(btn_frame, "CONNECT MAKV2", lambda: self._connect_mouse_api("MakV2")).pack(side="left")
+            self._add_text_button(btn_frame, "TEST MOVE", self._test_mouse_move).pack(side="left", padx=12)
+            return
+
+        if mode == "DHZ":
+            tip = ctk.CTkLabel(
+                self.hardware_content_frame,
+                text="DHZ API (UDP + Caesar-shift command protocol)",
+                font=("Roboto", 10),
+                text_color=COLOR_TEXT_DIM,
+            )
+            tip.pack(anchor="w", pady=(0, 8))
+
+            ip_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            ip_frame.pack(fill="x", pady=3)
+            ctk.CTkLabel(ip_frame, text="IP Address", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.dhz_ip_entry = ctk.CTkEntry(ip_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=170)
+            self.dhz_ip_entry.pack(side="right")
+            self.dhz_ip_entry.insert(0, self.saved_dhz_ip)
+            self.dhz_ip_entry.bind("<KeyRelease>", self._on_dhz_ip_changed)
+            self.dhz_ip_entry.bind("<FocusOut>", self._on_dhz_ip_changed)
+
+            port_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            port_frame.pack(fill="x", pady=3)
+            ctk.CTkLabel(port_frame, text="Port", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.dhz_port_entry = ctk.CTkEntry(port_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=170)
+            self.dhz_port_entry.pack(side="right")
+            self.dhz_port_entry.insert(0, self.saved_dhz_port)
+            self.dhz_port_entry.bind("<KeyRelease>", self._on_dhz_port_changed)
+            self.dhz_port_entry.bind("<FocusOut>", self._on_dhz_port_changed)
+
+            random_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            random_frame.pack(fill="x", pady=3)
+            ctk.CTkLabel(random_frame, text="Random Shift", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.dhz_random_entry = ctk.CTkEntry(random_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=170)
+            self.dhz_random_entry.pack(side="right")
+            self.dhz_random_entry.insert(0, self.saved_dhz_random)
+            self.dhz_random_entry.bind("<KeyRelease>", self._on_dhz_random_changed)
+            self.dhz_random_entry.bind("<FocusOut>", self._on_dhz_random_changed)
+
+            btn_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            btn_frame.pack(fill="x", pady=8)
+            self._add_text_button(btn_frame, "CONNECT DHZ", lambda: self._connect_mouse_api("DHZ")).pack(side="left")
+            self._add_text_button(btn_frame, "TEST MOVE", self._test_mouse_move).pack(side="left", padx=12)
+            return
+
+        if mode == "Ferrum":
+            tip = ctk.CTkLabel(
+                self.hardware_content_frame,
+                text="Ferrum Keyboard and Mouse API (Serial Port, KM style commands)",
+                font=("Roboto", 10),
+                text_color=COLOR_TEXT_DIM,
+            )
+            tip.pack(anchor="w", pady=(0, 8))
+
+            port_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            port_frame.pack(fill="x", pady=3)
+            ctk.CTkLabel(port_frame, text="COM Port (optional)", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.ferrum_device_path_entry = ctk.CTkEntry(
+                port_frame,
+                fg_color=COLOR_SURFACE,
+                border_width=0,
+                text_color=COLOR_TEXT,
+                width=170,
+            )
+            self.ferrum_device_path_entry.pack(side="right")
+            self.ferrum_device_path_entry.insert(0, self.saved_ferrum_device_path)
+            self.ferrum_device_path_entry.bind("<KeyRelease>", self._on_ferrum_device_path_changed)
+            self.ferrum_device_path_entry.bind("<FocusOut>", self._on_ferrum_device_path_changed)
+
+            notice = ctk.CTkLabel(
+                self.hardware_content_frame,
+                text="Leave empty for auto-detection. Tries baud rates: 115200, 9600, 38400, 57600",
+                font=("Roboto", 9),
+                text_color=COLOR_TEXT_DIM,
+            )
+            notice.pack(anchor="w", pady=(0, 8))
+
+            btn_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            btn_frame.pack(fill="x", pady=8)
+            self._add_text_button(btn_frame, "CONNECT FERRUM", lambda: self._connect_mouse_api("Ferrum")).pack(side="left")
+            self._add_text_button(btn_frame, "TEST MOVE", self._test_mouse_move).pack(side="left", padx=12)
+            return
+
+        if mode == "KmboxA":
+            dll_name = "kmA.pyd"
+            try:
+                from src.utils.mouse import get_expected_kmboxa_dll_name
+
+                dll_name = get_expected_kmboxa_dll_name()
+            except Exception:
+                pass
+
+            tip = ctk.CTkLabel(
+                self.hardware_content_frame,
+                text=f"KmboxA API auto DLL by Python version: {dll_name}",
+                font=("Roboto", 10),
+                text_color=COLOR_TEXT_DIM,
+            )
+            tip.pack(anchor="w", pady=(0, 8))
+
+            vid_pid_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            vid_pid_frame.pack(fill="x", pady=3)
+            ctk.CTkLabel(vid_pid_frame, text="VID/PID", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.kmboxa_vid_pid_entry = ctk.CTkEntry(
+                vid_pid_frame,
+                fg_color=COLOR_SURFACE,
+                border_width=0,
+                text_color=COLOR_TEXT,
+                width=170,
+            )
+            self.kmboxa_vid_pid_entry.pack(side="right")
+            self.kmboxa_vid_pid_entry.insert(0, self.saved_kmboxa_vid_pid)
+            self.kmboxa_vid_pid_entry.bind("<KeyRelease>", self._on_kmboxa_vid_pid_changed)
+            self.kmboxa_vid_pid_entry.bind("<FocusOut>", self._on_kmboxa_vid_pid_changed)
+
+            btn_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+            btn_frame.pack(fill="x", pady=8)
+            self._add_text_button(btn_frame, "CONNECT KMBOXA", lambda: self._connect_mouse_api("KmboxA")).pack(side="left")
+            self._add_text_button(btn_frame, "TEST MOVE", self._test_mouse_move).pack(side="left", padx=12)
+            return
+
+        # Net API controls
+        dll_name = "kmNet.pyd"
+        try:
+            from src.utils.mouse import get_expected_kmnet_dll_name
+
+            dll_name = get_expected_kmnet_dll_name()
+        except Exception:
+            pass
+
+        tip = ctk.CTkLabel(
+            self.hardware_content_frame,
+            text=f"Net API auto DLL by Python version: {dll_name}",
+            font=("Roboto", 10),
+            text_color=COLOR_TEXT_DIM,
+        )
+        tip.pack(anchor="w", pady=(0, 8))
+
+        ip_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+        ip_frame.pack(fill="x", pady=3)
+        ctk.CTkLabel(ip_frame, text="IP Address", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+        self.net_ip_entry = ctk.CTkEntry(ip_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=170)
+        self.net_ip_entry.pack(side="right")
+        self.net_ip_entry.insert(0, self.saved_net_ip)
+        self.net_ip_entry.bind("<KeyRelease>", self._on_net_ip_changed)
+        self.net_ip_entry.bind("<FocusOut>", self._on_net_ip_changed)
+
+        port_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+        port_frame.pack(fill="x", pady=3)
+        ctk.CTkLabel(port_frame, text="Port", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+        self.net_port_entry = ctk.CTkEntry(port_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=170)
+        self.net_port_entry.pack(side="right")
+        self.net_port_entry.insert(0, self.saved_net_port)
+        self.net_port_entry.bind("<KeyRelease>", self._on_net_port_changed)
+        self.net_port_entry.bind("<FocusOut>", self._on_net_port_changed)
+
+        uuid_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+        uuid_frame.pack(fill="x", pady=3)
+        ctk.CTkLabel(uuid_frame, text="UUID", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+        self.net_uuid_entry = ctk.CTkEntry(uuid_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=170)
+        self.net_uuid_entry.pack(side="right")
+        self.net_uuid_entry.insert(0, self.saved_net_uuid)
+        self.net_uuid_entry.bind("<KeyRelease>", self._on_net_uuid_changed)
+        self.net_uuid_entry.bind("<FocusOut>", self._on_net_uuid_changed)
+
+        btn_frame = ctk.CTkFrame(self.hardware_content_frame, fg_color="transparent")
+        btn_frame.pack(fill="x", pady=8)
+        self._add_text_button(btn_frame, "CONNECT NET", lambda: self._connect_mouse_api("Net")).pack(side="left")
+        self._add_text_button(btn_frame, "TEST MOVE", self._test_mouse_move).pack(side="left", padx=12)
+
+    def _on_mouse_api_changed(self, val):
+        mode_norm = str(val).strip().lower()
+        if mode_norm == "net":
+            self.saved_mouse_api = "Net"
+        elif mode_norm in ("kmboxa", "kmboxa_api", "kmboxaapi", "kma", "kmboxa-api"):
+            self.saved_mouse_api = "KmboxA"
+        elif mode_norm == "dhz":
+            self.saved_mouse_api = "DHZ"
+        elif mode_norm in ("makv2binary", "makv2_binary", "makv2-binary", "binary"):
+            self.saved_mouse_api = "MakV2Binary"
+        elif mode_norm in ("makv2", "mak_v2", "mak-v2"):
+            self.saved_mouse_api = "MakV2"
+        elif mode_norm == "arduino":
+            self.saved_mouse_api = "Arduino"
+        elif mode_norm in ("sendinput", "win32", "win32api", "win32_sendinput", "win32-sendinput"):
+            self.saved_mouse_api = "SendInput"
+        elif mode_norm == "ferrum":
+            self.saved_mouse_api = "Ferrum"
+        else:
+            self.saved_mouse_api = "Serial"
+        config.mouse_api = self.saved_mouse_api
+        if not self._supports_trigger_strafe_ui(self.saved_mouse_api):
+            config.trigger_strafe_mode = "off"
+        self.saved_auto_connect_mouse_api = bool(getattr(config, "auto_connect_mouse_api", self.saved_auto_connect_mouse_api))
+        self.saved_serial_auto_switch_4m = bool(
+            getattr(config, "serial_auto_switch_4m", self.saved_serial_auto_switch_4m)
+        )
+        # Cancel any in-flight connect request to avoid stale success callback after mode switch.
+        self._mouse_api_connect_job_id += 1
+        self._mouse_api_connecting = False
+        # Switching mode must drop current hardware connection state.
+        try:
+            from src.utils import mouse as mouse_backend
+
+            mouse_backend.disconnect_all(selected_mode=self.saved_mouse_api)
+        except Exception:
+            pass
+        self._update_mouse_api_ui()
+        self._set_status_indicator(f"Status: Mouse API {self.saved_mouse_api} selected", COLOR_TEXT_DIM)
+        self._update_hardware_status_ui()
+
+        if str(getattr(self, "_active_tab_name", "")) == "Trigger":
+            self._show_tb_tab()
+
+    def _on_auto_connect_mouse_api_changed(self):
+        val = bool(self.var_auto_connect_mouse_api.get())
+        self.saved_auto_connect_mouse_api = val
+        config.auto_connect_mouse_api = val
+        try:
+            config.save_to_file()
+        except Exception:
+            pass
+
+    def _on_serial_auto_switch_4m_changed(self):
+        val = bool(self.var_serial_auto_switch_4m.get())
+        self.saved_serial_auto_switch_4m = val
+        config.serial_auto_switch_4m = val
+        try:
+            config.save_to_file()
+        except Exception:
+            pass
+
+    def _on_serial_mode_selected(self, val):
+        mode_norm = str(val).strip().lower()
+        self.saved_serial_port_mode = "Manual" if mode_norm == "manual" else "Auto"
+        config.serial_port_mode = self.saved_serial_port_mode
+        self._update_mouse_api_ui()
+
+    def _on_serial_port_changed(self, event=None):
+        if hasattr(self, "serial_port_entry") and self.serial_port_entry.winfo_exists():
+            val = self.serial_port_entry.get().strip()
+            self.saved_serial_port = val
+            config.serial_port = val
+
+    def _on_arduino_port_changed(self, event=None):
+        if hasattr(self, "arduino_port_entry") and self.arduino_port_entry.winfo_exists():
+            val = self.arduino_port_entry.get().strip()
+            self.saved_arduino_port = val
+            config.arduino_port = val
+
+    def _on_arduino_baud_changed(self, event=None):
+        if hasattr(self, "arduino_baud_entry") and self.arduino_baud_entry.winfo_exists():
+            val = self.arduino_baud_entry.get().strip()
+            self.saved_arduino_baud = val
+            try:
+                config.arduino_baud = int(val)
+            except ValueError:
+                config.arduino_baud = 115200
+
+    def _on_net_ip_changed(self, event=None):
+        if hasattr(self, "net_ip_entry") and self.net_ip_entry.winfo_exists():
+            val = self.net_ip_entry.get().strip()
+            self.saved_net_ip = val
+            config.net_ip = val
+
+    def _on_net_port_changed(self, event=None):
+        if hasattr(self, "net_port_entry") and self.net_port_entry.winfo_exists():
+            val = self.net_port_entry.get().strip()
+            self.saved_net_port = val
+            config.net_port = val
+
+    def _on_net_uuid_changed(self, event=None):
+        if hasattr(self, "net_uuid_entry") and self.net_uuid_entry.winfo_exists():
+            val = self.net_uuid_entry.get().strip()
+            self.saved_net_uuid = val
+            config.net_uuid = val
+            config.net_mac = val
+
+    def _on_kmboxa_vid_pid_changed(self, event=None):
+        if hasattr(self, "kmboxa_vid_pid_entry") and self.kmboxa_vid_pid_entry.winfo_exists():
+            val = self.kmboxa_vid_pid_entry.get().strip()
+            self.saved_kmboxa_vid_pid = val
+            config.kmboxa_vid_pid = val
+
+    def _on_makv2_port_changed(self, event=None):
+        if hasattr(self, "makv2_port_entry") and self.makv2_port_entry.winfo_exists():
+            val = self.makv2_port_entry.get().strip()
+            self.saved_makv2_port = val
+            config.makv2_port = val
+
+    def _on_makv2_baud_changed(self, event=None):
+        if hasattr(self, "makv2_baud_entry") and self.makv2_baud_entry.winfo_exists():
+            val = self.makv2_baud_entry.get().strip()
+            self.saved_makv2_baud = val
+            try:
+                config.makv2_baud = int(val)
+            except ValueError:
+                pass
+
+    def _on_dhz_ip_changed(self, event=None):
+        if hasattr(self, "dhz_ip_entry") and self.dhz_ip_entry.winfo_exists():
+            val = self.dhz_ip_entry.get().strip()
+            self.saved_dhz_ip = val
+            config.dhz_ip = val
+
+    def _on_dhz_port_changed(self, event=None):
+        if hasattr(self, "dhz_port_entry") and self.dhz_port_entry.winfo_exists():
+            val = self.dhz_port_entry.get().strip()
+            self.saved_dhz_port = val
+            config.dhz_port = val
+
+    def _on_dhz_random_changed(self, event=None):
+        if hasattr(self, "dhz_random_entry") and self.dhz_random_entry.winfo_exists():
+            val = self.dhz_random_entry.get().strip()
+            self.saved_dhz_random = val
+            try:
+                config.dhz_random = int(val)
+            except ValueError:
+                pass
+
+    def _on_ferrum_device_path_changed(self, event=None):
+        if hasattr(self, "ferrum_device_path_entry") and self.ferrum_device_path_entry.winfo_exists():
+            val = self.ferrum_device_path_entry.get().strip()
+            self.saved_ferrum_device_path = val
+            config.ferrum_device_path = val
+
+    def _on_ferrum_connection_type_selected(self, val):
+        connection_type_norm = str(val).strip().lower()
+        if connection_type_norm not in ("auto", "serial", "network", "usb_hid"):
+            connection_type_norm = "auto"
+        self.saved_ferrum_connection_type = connection_type_norm
+        config.ferrum_connection_type = connection_type_norm
+
+    def _test_mouse_move(self):
+        try:
+            from src.utils import mouse as mouse_backend
+
+            if not getattr(mouse_backend, "is_connected", False):
+                self._set_status_indicator("Status: Mouse API not connected", COLOR_DANGER)
+                return
+
+            mouse_backend.test_move()
+            backend = mouse_backend.get_active_backend()
+            self._set_status_indicator(f"Status: Test move sent via {backend}", COLOR_TEXT)
+        except Exception as e:
+            self._set_status_indicator(f"Status: Mouse API test error: {e}", COLOR_DANGER)
+
+    def _switch_serial_to_4m(self):
+        if getattr(self, "_mouse_api_connecting", False):
+            self._set_status_indicator("Status: HW connecting...", COLOR_TEXT_DIM)
+            return
+        if getattr(self, "_serial_baud_switching", False):
+            self._set_status_indicator("Status: Serial baud switching...", COLOR_TEXT_DIM)
+            return
+
+        self._serial_baud_switching = True
+        self._set_status_indicator("Status: Switching Serial to 4M", COLOR_TEXT_DIM)
+        threading.Thread(target=self._switch_serial_to_4m_worker, daemon=True).start()
+
+    def _switch_serial_to_4m_worker(self):
+        success = False
+        error = ""
+        try:
+            from src.utils import mouse as mouse_backend
+
+            success = bool(mouse_backend.switch_to_4m())
+            if not success:
+                error = str(mouse_backend.get_last_connect_error() or "").strip()
+        except Exception as e:
+            success = False
+            error = str(e)
+
+        self.after(0, lambda: self._on_switch_serial_to_4m_done(success, error))
+
+    def _on_switch_serial_to_4m_done(self, success, error):
+        self._serial_baud_switching = False
+        if success:
+            self._set_status_indicator("Status: Serial switched to 4M", COLOR_TEXT)
+        else:
+            suffix = f": {error}" if error else ""
+            self._set_status_indicator(f"Status: Switch to 4M failed{suffix}", COLOR_DANGER)
+        self._update_hardware_status_ui()
+
+    def _connect_mouse_api(self, target_mode=None):
+        if getattr(self, "_mouse_api_connecting", False):
+            self._set_status_indicator("Status: HW connecting...", COLOR_TEXT_DIM)
+            return
+        if getattr(self, "_serial_baud_switching", False):
+            self._set_status_indicator("Status: Serial baud switching...", COLOR_TEXT_DIM)
+            return
+
+        mode = target_mode or getattr(config, "mouse_api", "Serial")
+        mode_norm = str(mode).strip().lower()
+        if mode_norm == "net":
+            mode = "Net"
+        elif mode_norm in ("kmboxa", "kmboxa_api", "kmboxaapi", "kma", "kmboxa-api"):
+            mode = "KmboxA"
+        elif mode_norm == "dhz":
+            mode = "DHZ"
+        elif mode_norm in ("makv2", "mak_v2", "mak-v2"):
+            mode = "MakV2"
+        elif mode_norm == "arduino":
+            mode = "Arduino"
+        elif mode_norm in ("sendinput", "win32", "win32api", "win32_sendinput", "win32-sendinput"):
+            mode = "SendInput"
+        elif mode_norm == "ferrum":
+            mode = "Ferrum"
+        else:
+            mode = "Serial"
+        payload = {"mode": mode}
+
+        if mode == "Serial":
+            selected_serial_mode = "Manual" if str(self.saved_serial_port_mode).strip().lower() == "manual" else "Auto"
+            self.saved_serial_port_mode = selected_serial_mode
+            if selected_serial_mode == "Manual":
+                if hasattr(self, "serial_port_entry") and self.serial_port_entry.winfo_exists():
+                    self.saved_serial_port = self.serial_port_entry.get().strip()
+            config.serial_port_mode = selected_serial_mode
+            config.serial_port = self.saved_serial_port
+            payload.update(
+                {
+                    "serial_port_mode": selected_serial_mode,
+                    "serial_port": self.saved_serial_port,
+                }
+            )
+
+        elif mode == "Arduino":
+            if hasattr(self, "arduino_port_entry") and self.arduino_port_entry.winfo_exists():
+                self.saved_arduino_port = self.arduino_port_entry.get().strip()
+            if hasattr(self, "arduino_baud_entry") and self.arduino_baud_entry.winfo_exists():
+                self.saved_arduino_baud = self.arduino_baud_entry.get().strip()
+
+            config.arduino_port = self.saved_arduino_port
+            try:
+                config.arduino_baud = int(self.saved_arduino_baud)
+            except ValueError:
+                config.arduino_baud = 115200
+            payload.update(
+                {
+                    "arduino_port": self.saved_arduino_port,
+                    "arduino_baud": config.arduino_baud,
+                }
+            )
+
+        elif mode == "Net":
+            if hasattr(self, "net_ip_entry") and self.net_ip_entry.winfo_exists():
+                self.saved_net_ip = self.net_ip_entry.get().strip()
+            if hasattr(self, "net_port_entry") and self.net_port_entry.winfo_exists():
+                self.saved_net_port = self.net_port_entry.get().strip()
+            if hasattr(self, "net_uuid_entry") and self.net_uuid_entry.winfo_exists():
+                self.saved_net_uuid = self.net_uuid_entry.get().strip()
+
+            config.net_ip = self.saved_net_ip
+            config.net_port = self.saved_net_port
+            config.net_uuid = self.saved_net_uuid
+            config.net_mac = self.saved_net_uuid
+            payload.update({
+                "ip": self.saved_net_ip,
+                "port": self.saved_net_port,
+                "uuid": self.saved_net_uuid,
+            })
+        elif mode == "KmboxA":
+            if hasattr(self, "kmboxa_vid_pid_entry") and self.kmboxa_vid_pid_entry.winfo_exists():
+                self.saved_kmboxa_vid_pid = self.kmboxa_vid_pid_entry.get().strip()
+            config.kmboxa_vid_pid = self.saved_kmboxa_vid_pid
+            payload.update({
+                "kmboxa_vid_pid": self.saved_kmboxa_vid_pid,
+            })
+
+        elif mode == "MakV2":
+            if hasattr(self, "makv2_port_entry") and self.makv2_port_entry.winfo_exists():
+                self.saved_makv2_port = self.makv2_port_entry.get().strip()
+            if hasattr(self, "makv2_baud_entry") and self.makv2_baud_entry.winfo_exists():
+                self.saved_makv2_baud = self.makv2_baud_entry.get().strip()
+
+            config.makv2_port = self.saved_makv2_port
+            try:
+                config.makv2_baud = int(self.saved_makv2_baud)
+            except ValueError:
+                config.makv2_baud = 4000000
+            payload.update({
+                "makv2_port": self.saved_makv2_port,
+                "makv2_baud": config.makv2_baud,
+            })
+        elif mode == "DHZ":
+            if hasattr(self, "dhz_ip_entry") and self.dhz_ip_entry.winfo_exists():
+                self.saved_dhz_ip = self.dhz_ip_entry.get().strip()
+            if hasattr(self, "dhz_port_entry") and self.dhz_port_entry.winfo_exists():
+                self.saved_dhz_port = self.dhz_port_entry.get().strip()
+            if hasattr(self, "dhz_random_entry") and self.dhz_random_entry.winfo_exists():
+                self.saved_dhz_random = self.dhz_random_entry.get().strip()
+
+            config.dhz_ip = self.saved_dhz_ip
+            config.dhz_port = self.saved_dhz_port
+            try:
+                config.dhz_random = int(self.saved_dhz_random)
+            except ValueError:
+                config.dhz_random = 0
+            payload.update({
+                "dhz_ip": self.saved_dhz_ip,
+                "dhz_port": self.saved_dhz_port,
+                "dhz_random": config.dhz_random,
+            })
+        elif mode == "Ferrum":
+            if hasattr(self, "ferrum_device_path_entry") and self.ferrum_device_path_entry.winfo_exists():
+                self.saved_ferrum_device_path = self.ferrum_device_path_entry.get().strip()
+
+            config.ferrum_device_path = self.saved_ferrum_device_path
+            payload.update({
+                "ferrum_device_path": self.saved_ferrum_device_path,
+                "ferrum_connection_type": "serial",  # Ferrum åªæ”¯æŒä¸²å£
+            })
+        elif mode == "SendInput":
+            pass
+
+        self._mouse_api_connecting = True
+        self._mouse_api_connect_job_id += 1
+        job_id = self._mouse_api_connect_job_id
+        self._set_status_indicator(f"Status: HW {mode} connecting", COLOR_TEXT_DIM)
+
+        threading.Thread(
+            target=self._connect_mouse_api_worker,
+            args=(job_id, payload),
+            daemon=True,
+        ).start()
+        self.after(
+            self._mouse_api_connect_timeout_ms,
+            lambda: self._check_mouse_api_connect_timeout(job_id, mode),
+        )
+
+    def _connect_mouse_api_worker(self, job_id, payload):
+        mode = payload.get("mode", "Serial")
+        success, error = False, "unknown error"
+        try:
+            from src.utils.mouse import switch_backend
+
+            if mode == "Net":
+                success, error = switch_backend(
+                    "Net",
+                    ip=payload.get("ip", ""),
+                    port=payload.get("port", ""),
+                    uuid=payload.get("uuid", ""),
+                )
+            elif mode == "KmboxA":
+                success, error = switch_backend(
+                    "KmboxA",
+                    kmboxa_vid_pid=payload.get("kmboxa_vid_pid", ""),
+                )
+            elif mode == "Arduino":
+                success, error = switch_backend(
+                    "Arduino",
+                    arduino_port=payload.get("arduino_port", ""),
+                    arduino_baud=payload.get("arduino_baud", 115200),
+                )
+            elif mode == "SendInput":
+                success, error = switch_backend("SendInput")
+            elif mode == "MakV2":
+                success, error = switch_backend(
+                    "MakV2",
+                    makv2_port=payload.get("makv2_port", ""),
+                    makv2_baud=payload.get("makv2_baud", 4000000),
+                )
+            elif mode == "DHZ":
+                success, error = switch_backend(
+                    "DHZ",
+                    dhz_ip=payload.get("dhz_ip", ""),
+                    dhz_port=payload.get("dhz_port", ""),
+                    dhz_random=payload.get("dhz_random", 0),
+                )
+            elif mode == "Ferrum":
+                success, error = switch_backend(
+                    "Ferrum",
+                    ferrum_device_path=payload.get("ferrum_device_path", ""),
+                    ferrum_connection_type="serial",  # Ferrum åªæ”¯æŒä¸²å£
+                )
+            else:
+                success, error = switch_backend(
+                    "Serial",
+                    serial_port_mode=payload.get("serial_port_mode", "Auto"),
+                    serial_port=payload.get("serial_port", ""),
+                )
+        except Exception as e:
+            success, error = False, str(e)
+
+        self.after(0, lambda: self._on_mouse_api_connect_done(job_id, mode, payload, success, error))
+
+    def _on_mouse_api_connect_done(self, job_id, mode, payload, success, error):
+        # Ignore stale callback results.
+        if job_id != getattr(self, "_mouse_api_connect_job_id", 0):
+            return
+
+        self._mouse_api_connecting = False
+        if success:
+            if mode == "Net":
+                self._set_status_indicator("Status: Mouse API connected (Net)", COLOR_TEXT)
+            elif mode == "KmboxA":
+                self._set_status_indicator("Status: Mouse API connected (KmboxA)", COLOR_TEXT)
+            elif mode == "Arduino":
+                self._set_status_indicator("Status: Mouse API connected (Arduino)", COLOR_TEXT)
+            elif mode == "SendInput":
+                self._set_status_indicator("Status: Mouse API connected (SendInput)", COLOR_TEXT)
+            elif mode == "MakV2":
+                self._set_status_indicator("Status: Mouse API connected (MakV2)", COLOR_TEXT)
+            elif mode == "DHZ":
+                self._set_status_indicator("Status: Mouse API connected (DHZ)", COLOR_TEXT)
+            else:
+                self._set_status_indicator("Status: Mouse API connected (Serial)", COLOR_TEXT)
+            return
+
+        self._set_status_indicator(f"Status: Mouse API error: {error}", COLOR_DANGER)
+
+    def _check_mouse_api_connect_timeout(self, job_id, mode):
+        if not getattr(self, "_mouse_api_connecting", False):
+            return
+        if job_id != getattr(self, "_mouse_api_connect_job_id", 0):
+            return
+
+        # Invalidate current job, ignore late callback from blocked worker.
+        self._mouse_api_connect_job_id += 1
+        self._mouse_api_connecting = False
+        self._set_status_indicator(f"Status: Mouse API timeout ({mode})", COLOR_DANGER)
+
+    def _update_capture_ui(self):
+        """éè§„æ‘Žé–¬å‘Šæ°é¨å‹¬å´Ÿé›å‰æŸŸå¨‰æ›Ÿæ´¿é‚?UI"""
+        # æ·‡æ¿†ç“¨é£è·ºå¢  UDP æ“ç¨¿å†å¦—å—™æ®‘éŠç¡·ç´™æ¿¡å‚›ç‰ç€›æ¨ºæ¹ªé”›?
+        if hasattr(self, 'udp_ip_entry') and self.udp_ip_entry.winfo_exists():
+            self.saved_udp_ip = self.udp_ip_entry.get()
+        if hasattr(self, 'udp_port_entry') and self.udp_port_entry.winfo_exists():
+            self.saved_udp_port = self.udp_port_entry.get()
+        
+        # æ·‡æ¿†ç“¨é£è·ºå¢  NDI é–¬å‘Šæ°é¨å‹¬ç°®é”›å î›§é‹æ»ƒç“¨é¦îŸ’ç´š
+        if hasattr(self, 'source_option') and self.source_option.winfo_exists():
+            current_selection = self.source_option.get()
+            if current_selection not in ["(Scanning...)", "(no sources)"]:
+                self.saved_ndi_source = current_selection
+        
+        # å¨“å‘´æ«Žé‘¸å©„æ®‘ UI éå†ªç¤Œ
+        for widget in self.capture_content_frame.winfo_children():
+            widget.destroy()
+        
+        # Add FPS Limit control at the top (applies to all capture methods)
+        self._add_subtitle_in_frame(self.capture_content_frame, "PROCESSING FPS LIMIT")
+        
+        fps_limit_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+        fps_limit_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(fps_limit_frame, text="Target FPS", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+        self.fps_limit_entry = ctk.CTkEntry(fps_limit_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=150)
+        self.fps_limit_entry.pack(side="right")
+        target_fps = str(getattr(config, "target_fps", 80))
+        self.fps_limit_entry.insert(0, target_fps)
+        self.fps_limit_entry.bind("<KeyRelease>", self._on_fps_limit_changed)
+        self.fps_limit_entry.bind("<FocusOut>", self._on_fps_limit_changed)
+        
+        self._add_spacer_in_frame(self.capture_content_frame)
+            
+        method = self.capture_method_var.get()
+        
+        if method == "NDI":
+            # NDI Controls
+            self._add_subtitle_in_frame(self.capture_content_frame, "NDI SOURCE")
+            self.source_option = self._add_option_menu(["(Scanning...)"], self._on_source_selected, parent=self.capture_content_frame)
+            self.source_option.pack(fill="x", pady=5)
+            
+            # æ¿¡å‚›ç‰éˆå¤‰ç¹šç€›æ¨¼æ®‘ NDI å©§æ„¶ç´é¢æ¥„â”‚éŽ­ãˆ äº¬
+            if self.saved_ndi_source:
+                # ç»‹å¶…ç·¦é¦?_apply_sources_to_ui æ¶“î…Ÿæ¸»é‡å­˜æŸŠå©§æ„¬åžªç›ã„¤ç”«éŽ­ãˆ äº¬é–¬å‘Šæ°
+                pass
+            
+            btn_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            btn_frame.pack(fill="x", pady=10)
+            self._add_text_button(btn_frame, "REFRESH", self._refresh_sources).pack(side="left")
+            self._add_text_button(btn_frame, "CONNECT", self._connect_to_selected).pack(side="left", padx=15)
+            
+            # NDI FOV ç‘ä½¸åžç‘·î…žç•¾
+            self._add_spacer_in_frame(self.capture_content_frame)
+            self._add_subtitle_in_frame(self.capture_content_frame, "CENTER CROP (FOV)")
+            
+            # Enable FOV Crop Checkbox
+            if not hasattr(self, 'var_ndi_fov_enabled'):
+                self.var_ndi_fov_enabled = tk.BooleanVar(value=getattr(config, "ndi_fov_enabled", False))
+            
+            fov_enable_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            fov_enable_frame.pack(fill="x", pady=5)
+            ctk.CTkLabel(fov_enable_frame, text="Enable Center Crop", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            ndi_fov_switch = ctk.CTkSwitch(
+                fov_enable_frame,
+                text="",
+                variable=self.var_ndi_fov_enabled,
+                command=self._on_ndi_fov_enabled_changed,
+                fg_color=COLOR_SURFACE,
+                progress_color=COLOR_ACCENT,
+                button_color=COLOR_ACCENT,
+                button_hover_color=COLOR_ACCENT_HOVER,
+                width=50,
+                height=20
+            )
+            ndi_fov_switch.pack(side="right")
+            
+            # FOV Slider (å§ï½†æŸŸè¤°ãˆ£î—†é’å›·ç´é™îˆæ¸¶ç‘•ä½·ç«´éŠå¬ªâ‚¬?
+            fov_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            fov_frame.pack(fill="x", pady=2)
+            fov_header = ctk.CTkFrame(fov_frame, fg_color="transparent")
+            fov_header.pack(fill="x")
+            ctk.CTkLabel(fov_header, text="FOV (half-size, square crop)", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.ndi_fov_entry = ctk.CTkEntry(
+                fov_header, width=80, height=25, fg_color=COLOR_SURFACE,
+                border_width=1, border_color=COLOR_BORDER,
+                text_color=COLOR_TEXT, font=FONT_MAIN, justify="center"
+            )
+            init_fov = int(getattr(config, "ndi_fov", 320))
+            self.ndi_fov_entry.insert(0, str(init_fov))
+            self.ndi_fov_entry.pack(side="right")
+            
+            self.ndi_fov_slider = ctk.CTkSlider(
+                fov_frame, from_=16, to=1920, number_of_steps=100,
+                fg_color=COLOR_SURFACE, progress_color=COLOR_ACCENT,
+                button_color=COLOR_ACCENT, button_hover_color=COLOR_ACCENT_HOVER,
+                height=10,
+                command=self._on_ndi_fov_slider_changed
+            )
+            self.ndi_fov_slider.set(init_fov)
+            self.ndi_fov_slider.pack(fill="x", pady=(2, 5))
+            self.ndi_fov_entry.bind("<Return>", self._on_ndi_fov_entry_changed)
+            self.ndi_fov_entry.bind("<FocusOut>", self._on_ndi_fov_entry_changed)
+            
+            # ç‘ä½¸åžç»¡å‹«æ¹‡ç’©å›ªâ–•
+            total_size = init_fov * 2
+            self.ndi_fov_info_label = ctk.CTkLabel(
+                self.capture_content_frame,
+                text=f"Crop area: {total_size} x {total_size} px (square, centered on frame)",
+                font=("Roboto", 9), text_color=COLOR_TEXT_DIM
+            )
+            self.ndi_fov_info_label.pack(anchor="w", pady=(0, 5))
+            
+        elif method == "UDP":
+            # UDP Controls
+            self._add_subtitle_in_frame(self.capture_content_frame, "UDP SETTINGS")
+            
+            # IP Input - æµ£è·¨æ•¤æ·‡æ¿†ç“¨é¨å‹«â‚¬?
+            ip_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            ip_frame.pack(fill="x", pady=5)
+            ctk.CTkLabel(ip_frame, text="IP Address", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.udp_ip_entry = ctk.CTkEntry(ip_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=150)
+            self.udp_ip_entry.pack(side="right")
+            self.udp_ip_entry.insert(0, self.saved_udp_ip)
+            # ç¼ä½¸ç•¾æµœå¬©æ¬¢æµ ãƒ¥î‡›é…å‚™ç¹šç€›?
+            self.udp_ip_entry.bind("<KeyRelease>", self._on_udp_ip_changed)
+            self.udp_ip_entry.bind("<FocusOut>", self._on_udp_ip_changed)
+            
+            # Port Input - æµ£è·¨æ•¤æ·‡æ¿†ç“¨é¨å‹«â‚¬?
+            port_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            port_frame.pack(fill="x", pady=5)
+            ctk.CTkLabel(port_frame, text="Port", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.udp_port_entry = ctk.CTkEntry(port_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=150)
+            self.udp_port_entry.pack(side="right")
+            self.udp_port_entry.insert(0, self.saved_udp_port)
+            # ç¼ä½¸ç•¾æµœå¬©æ¬¢æµ ãƒ¥î‡›é…å‚™ç¹šç€›?
+            self.udp_port_entry.bind("<KeyRelease>", self._on_udp_port_changed)
+            self.udp_port_entry.bind("<FocusOut>", self._on_udp_port_changed)
+            
+            btn_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            btn_frame.pack(fill="x", pady=10)
+            self._add_text_button(btn_frame, "CONNECT", self._connect_udp).pack(side="left")
+            
+            # UDP FOV ç‘ä½¸åžç‘·î…žç•¾
+            self._add_spacer_in_frame(self.capture_content_frame)
+            self._add_subtitle_in_frame(self.capture_content_frame, "CENTER CROP (FOV)")
+            
+            # Enable FOV Crop Checkbox
+            if not hasattr(self, 'var_udp_fov_enabled'):
+                self.var_udp_fov_enabled = tk.BooleanVar(value=getattr(config, "udp_fov_enabled", False))
+            
+            fov_enable_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            fov_enable_frame.pack(fill="x", pady=5)
+            ctk.CTkLabel(fov_enable_frame, text="Enable Center Crop", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            udp_fov_switch = ctk.CTkSwitch(
+                fov_enable_frame,
+                text="",
+                variable=self.var_udp_fov_enabled,
+                command=self._on_udp_fov_enabled_changed,
+                fg_color=COLOR_SURFACE,
+                progress_color=COLOR_ACCENT,
+                button_color=COLOR_ACCENT,
+                button_hover_color=COLOR_ACCENT_HOVER,
+                width=50,
+                height=20
+            )
+            udp_fov_switch.pack(side="right")
+            
+            # FOV Slider (å§ï½†æŸŸè¤°ãˆ£î—†é’å›·ç´é™îˆæ¸¶ç‘•ä½·ç«´éŠå¬ªâ‚¬?
+            fov_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            fov_frame.pack(fill="x", pady=2)
+            fov_header = ctk.CTkFrame(fov_frame, fg_color="transparent")
+            fov_header.pack(fill="x")
+            ctk.CTkLabel(fov_header, text="FOV (half-size, square crop)", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.udp_fov_entry = ctk.CTkEntry(
+                fov_header, width=80, height=25, fg_color=COLOR_SURFACE,
+                border_width=1, border_color=COLOR_BORDER,
+                text_color=COLOR_TEXT, font=FONT_MAIN, justify="center"
+            )
+            init_fov = int(getattr(config, "udp_fov", 320))
+            self.udp_fov_entry.insert(0, str(init_fov))
+            self.udp_fov_entry.pack(side="right")
+            
+            self.udp_fov_slider = ctk.CTkSlider(
+                fov_frame, from_=16, to=1920, number_of_steps=100,
+                fg_color=COLOR_SURFACE, progress_color=COLOR_ACCENT,
+                button_color=COLOR_ACCENT, button_hover_color=COLOR_ACCENT_HOVER,
+                height=10,
+                command=self._on_udp_fov_slider_changed
+            )
+            self.udp_fov_slider.set(init_fov)
+            self.udp_fov_slider.pack(fill="x", pady=(2, 5))
+            self.udp_fov_entry.bind("<Return>", self._on_udp_fov_entry_changed)
+            self.udp_fov_entry.bind("<FocusOut>", self._on_udp_fov_entry_changed)
+            
+            # ç‘ä½¸åžç»¡å‹«æ¹‡ç’©å›ªâ–•
+            total_size = init_fov * 2
+            self.udp_fov_info_label = ctk.CTkLabel(
+                self.capture_content_frame,
+                text=f"Crop area: {total_size} x {total_size} px (square, centered on frame)",
+                font=("Roboto", 9), text_color=COLOR_TEXT_DIM
+            )
+            self.udp_fov_info_label.pack(anchor="w", pady=(0, 5))
+    
+        elif method == "CaptureCard":
+            # CaptureCard Controls
+            self._add_subtitle_in_frame(self.capture_content_frame, "CAPTURE CARD SETTINGS")
+            
+            # Device Index
+            device_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            device_frame.pack(fill="x", pady=5)
+            ctk.CTkLabel(device_frame, text="Device Index", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.capture_card_device_entry = ctk.CTkEntry(device_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=150)
+            self.capture_card_device_entry.pack(side="right")
+            device_index = str(getattr(config, "capture_device_index", 0))
+            self.capture_card_device_entry.insert(0, device_index)
+            self.capture_card_device_entry.bind("<KeyRelease>", self._on_capture_card_device_changed)
+            self.capture_card_device_entry.bind("<FocusOut>", self._on_capture_card_device_changed)
+            
+            # Resolution
+            res_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            res_frame.pack(fill="x", pady=5)
+            ctk.CTkLabel(res_frame, text="Resolution (WxH)", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            res_input_frame = ctk.CTkFrame(res_frame, fg_color="transparent")
+            res_input_frame.pack(side="right")
+            self.capture_card_width_entry = ctk.CTkEntry(res_input_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=70)
+            self.capture_card_width_entry.pack(side="left", padx=2)
+            ctk.CTkLabel(res_input_frame, text="x", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left", padx=5)
+            self.capture_card_height_entry = ctk.CTkEntry(res_input_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=70)
+            self.capture_card_height_entry.pack(side="left", padx=2)
+            width = str(getattr(config, "capture_width", 1920))
+            height = str(getattr(config, "capture_height", 1080))
+            self.capture_card_width_entry.insert(0, width)
+            self.capture_card_height_entry.insert(0, height)
+            self.capture_card_width_entry.bind("<KeyRelease>", self._on_capture_card_resolution_changed)
+            self.capture_card_width_entry.bind("<FocusOut>", self._on_capture_card_resolution_changed)
+            self.capture_card_height_entry.bind("<KeyRelease>", self._on_capture_card_resolution_changed)
+            self.capture_card_height_entry.bind("<FocusOut>", self._on_capture_card_resolution_changed)
+            
+            # FPS
+            fps_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            fps_frame.pack(fill="x", pady=5)
+            ctk.CTkLabel(fps_frame, text="FPS", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.capture_card_fps_entry = ctk.CTkEntry(fps_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=150)
+            self.capture_card_fps_entry.pack(side="right")
+            fps = str(getattr(config, "capture_fps", 240))
+            self.capture_card_fps_entry.insert(0, fps)
+            self.capture_card_fps_entry.bind("<KeyRelease>", self._on_capture_card_fps_changed)
+            self.capture_card_fps_entry.bind("<FocusOut>", self._on_capture_card_fps_changed)
+            
+            self._add_spacer_in_frame(self.capture_content_frame)
+            self._add_subtitle_in_frame(self.capture_content_frame, "CAPTURE REGION")
+            
+            # Capture Range X
+            range_x_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            range_x_frame.pack(fill="x", pady=5)
+            ctk.CTkLabel(range_x_frame, text="Range X (min: 128)", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.capture_card_range_x_entry = ctk.CTkEntry(range_x_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=150)
+            self.capture_card_range_x_entry.pack(side="right")
+            range_x = str(getattr(config, "capture_range_x", 128))
+            self.capture_card_range_x_entry.insert(0, range_x)
+            self.capture_card_range_x_entry.bind("<KeyRelease>", self._on_capture_card_range_keyrelease)
+            self.capture_card_range_x_entry.bind("<FocusOut>", self._on_capture_card_range_focusout)
+            
+            # Capture Range Y
+            range_y_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            range_y_frame.pack(fill="x", pady=5)
+            ctk.CTkLabel(range_y_frame, text="Range Y (min: 128)", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.capture_card_range_y_entry = ctk.CTkEntry(range_y_frame, fg_color=COLOR_SURFACE, border_width=0, text_color=COLOR_TEXT, width=150)
+            self.capture_card_range_y_entry.pack(side="right")
+            range_y = str(getattr(config, "capture_range_y", 128))
+            self.capture_card_range_y_entry.insert(0, range_y)
+            self.capture_card_range_y_entry.bind("<KeyRelease>", self._on_capture_card_range_keyrelease)
+            self.capture_card_range_y_entry.bind("<FocusOut>", self._on_capture_card_range_focusout)
+            
+            # æ¤¤îˆœãšæ¶“î…žç¸¾æ¦›ç‚°ä¿ŠéŽ­?
+            center_info_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            center_info_frame.pack(fill="x", pady=5)
+            self.capture_card_center_label = ctk.CTkLabel(
+                center_info_frame, 
+                text="Center: (0, 0)", 
+                font=("Roboto", 10), 
+                text_color=COLOR_TEXT_DIM
+            )
+            self.capture_card_center_label.pack(side="left")
+            # é‡å­˜æŸŠæ¶“î…žç¸¾æ¦›ç‚ºâ€™ç»€?
+            self._update_capture_card_center_display()
+            
+            btn_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            btn_frame.pack(fill="x", pady=10)
+            self._add_text_button(btn_frame, "CONNECT", self._connect_capture_card).pack(side="left")
+        
+        elif method == "MSS":
+            # MSS Screen Capture Controls
+            self._add_subtitle_in_frame(self.capture_content_frame, "MSS SCREEN CAPTURE")
+            ctk.CTkLabel(
+                self.capture_content_frame,
+                text="For dual-PC streaming users (e.g., Moonlight), pair MSS with SendInput.",
+                font=("Roboto", 10, "bold"),
+                text_color=COLOR_DANGER,
+            ).pack(anchor="w", pady=(0, 8))
+            
+            # Monitor Index
+            monitor_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            monitor_frame.pack(fill="x", pady=5)
+            ctk.CTkLabel(monitor_frame, text="Monitor Index", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.mss_monitor_entry = ctk.CTkEntry(
+                monitor_frame, fg_color=COLOR_SURFACE, border_width=0,
+                text_color=COLOR_TEXT, width=150
+            )
+            self.mss_monitor_entry.pack(side="right")
+            self.mss_monitor_entry.insert(0, str(getattr(config, "mss_monitor_index", 1)))
+            self.mss_monitor_entry.bind("<KeyRelease>", self._on_mss_monitor_changed)
+            self.mss_monitor_entry.bind("<FocusOut>", self._on_mss_monitor_changed)
+            
+            # é™îˆœæ•¤é“»ãˆ ç®·é’æ¥„ã€ƒç’©å›ªâ–•
+            try:
+                from src.capture.mss_capture import MSSCapture, HAS_MSS
+                if HAS_MSS:
+                    temp_mss = MSSCapture()
+                    monitor_list = temp_mss.get_monitor_list()
+                    if monitor_list:
+                        info_text = " | ".join(monitor_list)
+                    else:
+                        info_text = "No monitors detected"
+                else:
+                    info_text = "mss not installed (pip install mss)"
+            except Exception:
+                info_text = "Unable to detect monitors"
+            
+            ctk.CTkLabel(
+                self.capture_content_frame, text=info_text,
+                font=("Roboto", 9), text_color=COLOR_TEXT_DIM
+            ).pack(anchor="w", pady=(0, 5))
+            
+            self._add_spacer_in_frame(self.capture_content_frame)
+            self._add_subtitle_in_frame(self.capture_content_frame, "CAPTURE FOV (center-based)")
+            
+            # FOV X Slider
+            fov_x_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            fov_x_frame.pack(fill="x", pady=2)
+            fov_x_header = ctk.CTkFrame(fov_x_frame, fg_color="transparent")
+            fov_x_header.pack(fill="x")
+            ctk.CTkLabel(fov_x_header, text="FOV X (half-width)", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.mss_fov_x_entry = ctk.CTkEntry(
+                fov_x_header, width=80, height=25, fg_color=COLOR_SURFACE,
+                border_width=1, border_color=COLOR_BORDER,
+                text_color=COLOR_TEXT, font=FONT_MAIN, justify="center"
+            )
+            init_fov_x = int(getattr(config, "mss_fov_x", 320))
+            self.mss_fov_x_entry.insert(0, str(init_fov_x))
+            self.mss_fov_x_entry.pack(side="right")
+            
+            self.mss_fov_x_slider = ctk.CTkSlider(
+                fov_x_frame, from_=16, to=1920, number_of_steps=100,
+                fg_color=COLOR_SURFACE, progress_color=COLOR_ACCENT,
+                button_color=COLOR_ACCENT, button_hover_color=COLOR_ACCENT_HOVER,
+                height=10,
+                command=self._on_mss_fov_x_slider_changed
+            )
+            self.mss_fov_x_slider.set(init_fov_x)
+            self.mss_fov_x_slider.pack(fill="x", pady=(2, 5))
+            self.mss_fov_x_entry.bind("<Return>", self._on_mss_fov_x_entry_changed)
+            self.mss_fov_x_entry.bind("<FocusOut>", self._on_mss_fov_x_entry_changed)
+            
+            # FOV Y Slider
+            fov_y_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            fov_y_frame.pack(fill="x", pady=2)
+            fov_y_header = ctk.CTkFrame(fov_y_frame, fg_color="transparent")
+            fov_y_header.pack(fill="x")
+            ctk.CTkLabel(fov_y_header, text="FOV Y (half-height)", font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+            self.mss_fov_y_entry = ctk.CTkEntry(
+                fov_y_header, width=80, height=25, fg_color=COLOR_SURFACE,
+                border_width=1, border_color=COLOR_BORDER,
+                text_color=COLOR_TEXT, font=FONT_MAIN, justify="center"
+            )
+            init_fov_y = int(getattr(config, "mss_fov_y", 320))
+            self.mss_fov_y_entry.insert(0, str(init_fov_y))
+            self.mss_fov_y_entry.pack(side="right")
+            
+            self.mss_fov_y_slider = ctk.CTkSlider(
+                fov_y_frame, from_=16, to=1080, number_of_steps=100,
+                fg_color=COLOR_SURFACE, progress_color=COLOR_ACCENT,
+                button_color=COLOR_ACCENT, button_hover_color=COLOR_ACCENT_HOVER,
+                height=10,
+                command=self._on_mss_fov_y_slider_changed
+            )
+            self.mss_fov_y_slider.set(init_fov_y)
+            self.mss_fov_y_slider.pack(fill="x", pady=(2, 5))
+            self.mss_fov_y_entry.bind("<Return>", self._on_mss_fov_y_entry_changed)
+            self.mss_fov_y_entry.bind("<FocusOut>", self._on_mss_fov_y_entry_changed)
+            
+            # éŽ¿å³°å½‡ç»¡å‹«æ¹‡ç’©å›ªâ–•
+            total_w = init_fov_x * 2
+            total_h = init_fov_y * 2
+            self.mss_capture_info_label = ctk.CTkLabel(
+                self.capture_content_frame,
+                text=f"Capture area: {total_w} x {total_h} px (centered on screen)",
+                font=("Roboto", 9), text_color=COLOR_TEXT_DIM
+            )
+            self.mss_capture_info_label.pack(anchor="w", pady=(0, 5))
+            
+            btn_frame = ctk.CTkFrame(self.capture_content_frame, fg_color="transparent")
+            btn_frame.pack(fill="x", pady=10)
+            self._add_text_button(btn_frame, "CONNECT", self._connect_mss).pack(side="left")
+
+    def _on_udp_ip_changed(self, event=None):
+        """ç€µï¸½æªªæ·‡æ¿†ç“¨ UDP IP"""
+        if hasattr(self, 'udp_ip_entry') and self.udp_ip_entry.winfo_exists():
+            val = self.udp_ip_entry.get()
+            self.saved_udp_ip = val
+            config.udp_ip = val
+
+    def _on_udp_port_changed(self, event=None):
+        """ç€µï¸½æªªæ·‡æ¿†ç“¨ UDP Port"""
+        if hasattr(self, 'udp_port_entry') and self.udp_port_entry.winfo_exists():
+            val = self.udp_port_entry.get()
+            self.saved_udp_port = val
+            config.udp_port = val
+    
+    def _on_capture_card_device_changed(self, event=None):
+        """ç€µï¸½æªªæ·‡æ¿†ç“¨ CaptureCard Device Index"""
+        if hasattr(self, 'capture_card_device_entry') and self.capture_card_device_entry.winfo_exists():
+            try:
+                val = int(self.capture_card_device_entry.get())
+                config.capture_device_index = val
+            except ValueError:
+                pass
+    
+    def _on_capture_card_resolution_changed(self, event=None):
+        """ç€µï¸½æªªæ·‡æ¿†ç“¨ CaptureCard Resolution"""
+        if hasattr(self, 'capture_card_width_entry') and hasattr(self, 'capture_card_height_entry'):
+            if self.capture_card_width_entry.winfo_exists() and self.capture_card_height_entry.winfo_exists():
+                try:
+                    width = int(self.capture_card_width_entry.get())
+                    height = int(self.capture_card_height_entry.get())
+                    config.capture_width = width
+                    config.capture_height = height
+                except ValueError:
+                    pass
+    
+    def _on_capture_card_fps_changed(self, event=None):
+        """ç€µï¸½æªªæ·‡æ¿†ç“¨ CaptureCard FPS"""
+        if hasattr(self, 'capture_card_fps_entry') and self.capture_card_fps_entry.winfo_exists():
+            try:
+                val = float(self.capture_card_fps_entry.get())
+                config.capture_fps = val
+            except ValueError:
+                pass
+    
+    def _on_fps_limit_changed(self, event=None):
+        """Handle FPS limit change"""
+        try:
+            if not hasattr(self, 'fps_limit_entry'):
+                return
+            fps = float(self.fps_limit_entry.get())
+            if fps < 1 or fps > 1000:
+                fps = 80
+                self.fps_limit_entry.delete(0, "end")
+                self.fps_limit_entry.insert(0, "80")
+            config.target_fps = fps
+            config.save_to_file()
+            # Update tracker's target FPS dynamically
+            if hasattr(self, 'tracker') and self.tracker:
+                if hasattr(self.tracker, 'set_target_fps'):
+                    self.tracker.set_target_fps(fps)
+                else:
+                    self.tracker._target_fps = float(fps)
+        except ValueError:
+            pass
+    
+    def _on_capture_card_range_keyrelease(self, event=None):
+        """é¦ã„¨å‡ éãƒ©äº·ç»‹å¬©è…‘é‡å­˜æŸŠæ¶“î…žç¸¾æ¦›ç‚ºâ€™ç»€çŒ´ç´™æ¶“å¶…æŒ¤é’æœµæ…¨é€ç¡…å‡ éãƒ¦î”‹é”›?"""
+        if hasattr(self, 'capture_card_range_x_entry') and hasattr(self, 'capture_card_range_y_entry'):
+            if self.capture_card_range_x_entry.winfo_exists() and self.capture_card_range_y_entry.winfo_exists():
+                try:
+                    range_x_str = self.capture_card_range_x_entry.get()
+                    range_y_str = self.capture_card_range_y_entry.get()
+                    
+                    # æ¿¡å‚›ç‰é„îˆœâ”–ç€›æ¥ƒîƒæ¶“è¯§ç´æ¶“å¶ˆæª¿éžå—­ç´™éä½½Å«é¢ã„¦åŸ—å¨“å‘¯â”–æ“ç¨¿å†é”›?
+                    if not range_x_str or not range_y_str:
+                        return
+                    
+                    range_x = int(range_x_str)
+                    range_y = int(range_y_str)
+                    
+                    # é™î…æ´¿é‚é¢è…‘è¹‡å†®ç²¸æ¤¤îˆœãšé”›å±¼ç¬‰é‡å­˜æŸŠé–°å¶‡ç–†é”›å ¥åŽ¤ç¼ƒî†¼æ¹ªæ¾¶åžå¹“é’ï¹‚ç²¸é…å‚›æ´¿é‚å¸®ç´š
+                    # éä½½Å«é¢ã„¦åŸ—æ“ç¨¿å†æµ è®³ç¶éç¨¿ç“§é”›å²„îŸ´ç’€å¤Šæ¹ªæ¾¶åžå¹“é’ï¹‚ç²¸é…å‚žâ‚¬èŒ¶î”‘
+                    # é‡å­˜æŸŠæ¶“î…žç¸¾æ¦›ç‚ºâ€™ç»€çŒ´ç´™æµ£è·¨æ•¤æ“ç¨¿å†é¨å‹«â‚¬ç¡·ç´é—å……å¨‡çå¿”æŸ¤128æ¶”ç†¼â€™ç»€çŒ´ç´š
+                    self._update_capture_card_center_display_with_values(range_x, range_y)
+                except ValueError:
+                    # æ¿¡å‚›ç‰æ“ç¨¿å†æ¶“å¶†æ§¸éç¨¿ç“§é”›å±¼ç¬‰é“æ› æ‚Šé”›å åŽ‘ç‘·è¾©æ•¤éŽ´å‰è¾œç»¾å²ƒå‡ éãƒ¯ç´š
+                    pass
+    
+    def _on_capture_card_range_focusout(self, event=None):
+        """æ¾¶åžå¹“é’ï¹‚ç²¸é…å‚žîŸ´ç’€å¤‰ç”«æ·‡î†½î„œ CaptureCard Range"""
+        if hasattr(self, 'capture_card_range_x_entry') and hasattr(self, 'capture_card_range_y_entry'):
+            if self.capture_card_range_x_entry.winfo_exists() and self.capture_card_range_y_entry.winfo_exists():
+                try:
+                    range_x_str = self.capture_card_range_x_entry.get()
+                    range_y_str = self.capture_card_range_y_entry.get()
+                    
+                    # æ¿¡å‚›ç‰é„îˆœâ”–ç€›æ¥ƒîƒæ¶“è¯§ç´éŽ­ãˆ äº¬éæ´ªç²¯ç‘¾å¶…â‚¬?
+                    if not range_x_str:
+                        range_x = 128
+                        self.capture_card_range_x_entry.delete(0, "end")
+                        self.capture_card_range_x_entry.insert(0, "128")
+                    else:
+                        range_x = int(range_x_str)
+                        # çº°è½°ç¹šéˆâ‚¬æµ£åº¡â‚¬è‚©å¤ 128
+                        if range_x < 128:
+                            range_x = 128
+                            self.capture_card_range_x_entry.delete(0, "end")
+                            self.capture_card_range_x_entry.insert(0, "128")
+                    
+                    if not range_y_str:
+                        range_y = 128
+                        self.capture_card_range_y_entry.delete(0, "end")
+                        self.capture_card_range_y_entry.insert(0, "128")
+                    else:
+                        range_y = int(range_y_str)
+                        # çº°è½°ç¹šéˆâ‚¬æµ£åº¡â‚¬è‚©å¤ 128
+                        if range_y < 128:
+                            range_y = 128
+                            self.capture_card_range_y_entry.delete(0, "end")
+                            self.capture_card_range_y_entry.insert(0, "128")
+                    
+                    # é‡å­˜æŸŠé–°å¶‡ç–†
+                    config.capture_range_x = range_x
+                    config.capture_range_y = range_y
+                    # é‡å­˜æŸŠæ¶“î…žç¸¾æ¦›ç‚ºâ€™ç»€?
+                    self._update_capture_card_center_display()
+                except ValueError:
+                    # æ¿¡å‚›ç‰æ“ç¨¿å†æ¶“å¶†æ§¸éç¨¿ç“§é”›å±¾ä»®å¯°â•ƒå¤éˆå¤‹æ™¥éŠ?
+                    try:
+                        current_x = int(getattr(config, "capture_range_x", 128))
+                        if current_x < 128:
+                            current_x = 128
+                        self.capture_card_range_x_entry.delete(0, "end")
+                        self.capture_card_range_x_entry.insert(0, str(current_x))
+                        config.capture_range_x = current_x
+                    except:
+                        self.capture_card_range_x_entry.delete(0, "end")
+                        self.capture_card_range_x_entry.insert(0, "128")
+                        config.capture_range_x = 128
+                    
+                    try:
+                        current_y = int(getattr(config, "capture_range_y", 128))
+                        if current_y < 128:
+                            current_y = 128
+                        self.capture_card_range_y_entry.delete(0, "end")
+                        self.capture_card_range_y_entry.insert(0, str(current_y))
+                        config.capture_range_y = current_y
+                    except:
+                        self.capture_card_range_y_entry.delete(0, "end")
+                        self.capture_card_range_y_entry.insert(0, "128")
+                        config.capture_range_y = 128
+                    
+                    # é‡å­˜æŸŠæ¶“î…žç¸¾æ¦›ç‚ºâ€™ç»€?
+                    self._update_capture_card_center_display()
+    
+    def _update_capture_card_center_display(self):
+        """é‡å­˜æŸŠ CaptureCard æ¶“î…žç¸¾æ¦›ç‚ºâ€™ç»€çŒ´ç´™å¯°?config ç’â‚¬é™æ µç´š"""
+        if hasattr(self, 'capture_card_center_label') and self.capture_card_center_label.winfo_exists():
+            try:
+                range_x = int(getattr(config, "capture_range_x", 128))
+                range_y = int(getattr(config, "capture_range_y", 128))
+                
+                # çº°è½°ç¹šéˆâ‚¬æµ£åº¡â‚¬è‚©å¤ 128
+                if range_x < 128:
+                    range_x = 128
+                if range_y < 128:
+                    range_y = 128
+                
+                # æ¿¡å‚›ç‰ç»¡å‹«æ¹‡é?0 éŽ´æ ¨æ¹­ç‘·î… ç–†é”›å±¼å¨‡é¢ã„©ç²¯ç‘¾å¶…â‚¬å…¼åž¨é’å—šé²¸éœ?
+                if range_x <= 0:
+                    range_x = max(128, int(getattr(config, "capture_width", 1920)))
+                if range_y <= 0:
+                    range_y = max(128, int(getattr(config, "capture_height", 1080)))
+                
+                # ç‘·å ¢ç•»æ¶“î…žç¸¾æ¦›çƒ‡ç´°é©çƒ˜æŸ¤ range_x éœ?range_y é¨?X/2, Y/2
+                center_x = range_x // 2
+                center_y = range_y // 2
+                
+                self.capture_card_center_label.configure(
+                    text=f"Center: ({center_x}, {center_y}) | Range: {range_x}x{range_y}"
+                )
+            except (ValueError, AttributeError):
+                self.capture_card_center_label.configure(text="Center: (0, 0)")
+    
+    def _update_capture_card_center_display_with_values(self, range_x, range_y):
+        """é‡å­˜æŸŠ CaptureCard æ¶“î…žç¸¾æ¦›ç‚ºâ€™ç»€çŒ´ç´™æµ£è·¨æ•¤éŽ¸å›§ç•¾é¨å‹«â‚¬ç¡·ç´š"""
+        if hasattr(self, 'capture_card_center_label') and self.capture_card_center_label.winfo_exists():
+            try:
+                # æµ£è·¨æ•¤éŒå†²å†é¨å‹«â‚¬ç¡·ç´™é—å……å¨‡çå¿”æŸ¤128æ¶”ç†¼â€™ç»€çŒ´ç´ç’æ’¶æ•¤éŽ´å‰æ¹…é’æ‹Œå‡ éãƒ§æ®‘éŠç¡·ç´š
+                if range_x <= 0:
+                    range_x = max(128, int(getattr(config, "capture_width", 1920)))
+                if range_y <= 0:
+                    range_y = max(128, int(getattr(config, "capture_height", 1080)))
+                
+                # ç‘·å ¢ç•»æ¶“î…žç¸¾æ¦›çƒ‡ç´°é©çƒ˜æŸ¤ range_x éœ?range_y é¨?X/2, Y/2
+                center_x = range_x // 2
+                center_y = range_y // 2
+                
+                self.capture_card_center_label.configure(
+                    text=f"Center: ({center_x}, {center_y}) | Range: {range_x}x{range_y}"
+                )
+            except (ValueError, AttributeError):
+                self.capture_card_center_label.configure(text="Center: (0, 0)")
+
+    def _show_aimbot_tab(self):
+        self._active_tab_name = "Main Aimbot"
+        self._clear_content()
+        self._add_title("Primary Aimbot Suite")
+        aimbot_tabs = self._create_category_tabs(["Engine", "Precision", "Hotkeys"])
+        tab_core = aimbot_tabs["Engine"]
+        tab_targeting = aimbot_tabs["Precision"]
+        tab_activation = aimbot_tabs["Hotkeys"]
+
+        sec_core = self._create_collapsible_section(tab_core, "Core Controls", initially_open=True)
+        self.var_enableaim = tk.BooleanVar(value=getattr(config, "enableaim", False))
+        self._add_switch_in_frame(sec_core, "Enable Aimbot", self.var_enableaim, self._on_enableaim_changed)
+        self._checkbox_vars["enableaim"] = self.var_enableaim
+        
+        # Anti-Smoke Switch
+        self.var_anti_smoke = tk.BooleanVar(value=getattr(config, "anti_smoke_enabled", False))
+        self._add_switch_in_frame(sec_core, "Enable Anti-Smoke", self.var_anti_smoke, self._on_anti_smoke_changed)
+        self._checkbox_vars["anti_smoke_enabled"] = self.var_anti_smoke
+        
+        # éˆ¹â‚¬éˆ¹â‚¬ OPERATION MODE (collapsible) éˆ¹â‚¬éˆ¹â‚¬
+        sec_mode = self._create_collapsible_section(tab_core, "Operation Mode", initially_open=True)
+        self.mode_option = self._add_option_row_in_frame(sec_mode, "Mode", ["Normal", "Silent", "NCAF", "WindMouse", "Bezier"], self._on_mode_selected)
+        self._option_widgets["mode"] = self.mode_option
+        current_mode = getattr(config, "mode", "Normal")
+        self.mode_option.set(current_mode)
+        
+        # éˆ¹â‚¬éˆ¹â‚¬ MODE PARAMETERS (collapsible) éˆ¹â‚¬éˆ¹â‚¬
+        sec_params = self._create_collapsible_section(
+            tab_core,
+            f"{current_mode} Parameters",
+            initially_open=True,
+            state_key="mode_parameters",
+        )
+        
+        if current_mode == "Normal":
+            self._add_subtitle_in_frame(sec_params, "SENSITIVITY")
+            self._add_slider_in_frame(sec_params, "X-Speed", "normal_x_speed", 0.1, 2000,
+                                      float(getattr(config, "normal_x_speed", 0.5)),
+                                      self._on_normal_x_speed_changed)
+            self._add_slider_in_frame(sec_params, "Y-Speed", "normal_y_speed", 0.1, 2000,
+                                      float(getattr(config, "normal_y_speed", 0.5)),
+                                      self._on_normal_y_speed_changed)
+            self._add_slider_in_frame(sec_params, "Smoothing", "normalsmooth", 1, 30,
+                                      float(getattr(config, "normalsmooth", 10)),
+                                      self._on_config_normal_smooth_changed)
+            self._add_spacer_in_frame(sec_params)
+            self._add_subtitle_in_frame(sec_params, "FOV")
+            self._add_slider_in_frame(sec_params, "FOV Size", "fovsize", 1, 1000,
+                                      float(getattr(config, "fovsize", 300)),
+                                      self._on_fovsize_changed)
+            self._add_slider_in_frame(sec_params, "FOV Smooth", "normalsmoothfov", 1, 30,
+                                      float(getattr(config, "normalsmoothfov", 10)),
+                                      self._on_config_normal_smoothfov_changed)
+            self._add_ads_fov_controls_in_frame(sec_params, is_sec=False)
+        
+        elif current_mode == "Silent":
+            self._add_subtitle_in_frame(sec_params, "SILENT PARAMETERS")
+            self._add_slider_in_frame(sec_params, "Distance (Multiplier)", "silent_distance", 0.1, 10.0,
+                                      float(getattr(config, "silent_distance", 1.0)),
+                                      self._on_silent_distance_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Delay (ms)", "silent_delay", 0.001, 300.0,
+                                      float(getattr(config, "silent_delay", 100.0)),
+                                      self._on_silent_delay_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Move Delay (ms)", "silent_move_delay", 0.001, 300.0,
+                                      float(getattr(config, "silent_move_delay", 500.0)),
+                                      self._on_silent_move_delay_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Return Delay (ms)", "silent_return_delay", 0.001, 300.0,
+                                      float(getattr(config, "silent_return_delay", 500.0)),
+                                      self._on_silent_return_delay_changed, is_float=True)
+            self._add_spacer_in_frame(sec_params)
+            self._add_subtitle_in_frame(sec_params, "FOV")
+            self._add_slider_in_frame(sec_params, "FOV Size", "fovsize", 1, 1000,
+                                      float(getattr(config, "fovsize", 300)),
+                                      self._on_fovsize_changed)
+            self._add_ads_fov_controls_in_frame(sec_params, is_sec=False)
+        
+        elif current_mode == "NCAF":
+            self._add_subtitle_in_frame(sec_params, "NCAF PARAMETERS")
+            self._add_slider_in_frame(sec_params, "Alpha (Speed Curve)", "ncaf_alpha", 0.1, 5.0,
+                                      float(getattr(config, "ncaf_alpha", 1.5)),
+                                      self._on_ncaf_alpha_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Snap Boost Factor", "ncaf_snap_boost", 0.01, 2.0,
+                                      float(getattr(config, "ncaf_snap_boost", 0.3)),
+                                      self._on_ncaf_snap_boost_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Max Step", "ncaf_max_step", 1, 200,
+                                      float(getattr(config, "ncaf_max_step", 50)),
+                                      self._on_ncaf_max_step_changed)
+            self._add_slider_in_frame(sec_params, "Min Speed Multiplier", "ncaf_min_speed_multiplier", 0.01, 1.0,
+                                      float(getattr(config, "ncaf_min_speed_multiplier", 0.01)),
+                                      self._on_ncaf_min_speed_multiplier_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Max Speed Multiplier", "ncaf_max_speed_multiplier", 1.0, 20.0,
+                                      float(getattr(config, "ncaf_max_speed_multiplier", 10.0)),
+                                      self._on_ncaf_max_speed_multiplier_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Prediction Interval (ms)", "ncaf_prediction_interval", 1, 100,
+                                      float(getattr(config, "ncaf_prediction_interval", 0.016)) * 1000,
+                                      self._on_ncaf_prediction_interval_changed, is_float=True)
+            self._add_spacer_in_frame(sec_params)
+            self._add_subtitle_in_frame(sec_params, "FOV")
+            self._add_slider_in_frame(sec_params, "Snap Radius (Outer)", "ncaf_snap_radius", 10, 500,
+                                      float(getattr(config, "ncaf_snap_radius", 150)),
+                                      self._on_ncaf_snap_radius_changed)
+            self._add_slider_in_frame(sec_params, "Near Radius (Inner)", "ncaf_near_radius", 5, 400,
+                                      float(getattr(config, "ncaf_near_radius", 50)),
+                                      self._on_ncaf_near_radius_changed)
+            self._add_ads_fov_controls_in_frame(sec_params, is_sec=False)
+        
+        elif current_mode == "WindMouse":
+            self._add_subtitle_in_frame(sec_params, "WINDMOUSE PARAMETERS")
+            self._add_slider_in_frame(sec_params, "Gravity", "wm_gravity", 0.1, 30.0,
+                                      float(getattr(config, "wm_gravity", 9.0)),
+                                      self._on_wm_gravity_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Wind", "wm_wind", 0.1, 20.0,
+                                      float(getattr(config, "wm_wind", 3.0)),
+                                      self._on_wm_wind_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Max Step", "wm_max_step", 1, 100,
+                                      float(getattr(config, "wm_max_step", 15)),
+                                      self._on_wm_max_step_changed)
+            self._add_slider_in_frame(sec_params, "Min Step", "wm_min_step", 0.1, 20,
+                                      float(getattr(config, "wm_min_step", 2)),
+                                      self._on_wm_min_step_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Min Delay (ms)", "wm_min_delay", 0.1, 50,
+                                      float(getattr(config, "wm_min_delay", 0.001)) * 1000,
+                                      self._on_wm_min_delay_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Max Delay (ms)", "wm_max_delay", 0.1, 50,
+                                      float(getattr(config, "wm_max_delay", 0.003)) * 1000,
+                                      self._on_wm_max_delay_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Distance Threshold", "wm_distance_threshold", 10, 200,
+                                      float(getattr(config, "wm_distance_threshold", 50)),
+                                      self._on_wm_distance_threshold_changed, is_float=True)
+            self._add_spacer_in_frame(sec_params)
+            self._add_subtitle_in_frame(sec_params, "FOV")
+            self._add_slider_in_frame(sec_params, "FOV Size", "fovsize", 1, 1000,
+                                      float(getattr(config, "fovsize", 300)),
+                                      self._on_fovsize_changed)
+            self._add_ads_fov_controls_in_frame(sec_params, is_sec=False)
+        
+        elif current_mode == "Bezier":
+            self._add_subtitle_in_frame(sec_params, "BEZIER PARAMETERS")
+            self._add_slider_in_frame(sec_params, "Segments", "bezier_segments", 1, 30,
+                                      float(getattr(config, "bezier_segments", 8)),
+                                      self._on_bezier_segments_changed)
+            self._add_slider_in_frame(sec_params, "Ctrl X", "bezier_ctrl_x", 0.0, 100.0,
+                                      float(getattr(config, "bezier_ctrl_x", 16.0)),
+                                      self._on_bezier_ctrl_x_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Ctrl Y", "bezier_ctrl_y", 0.0, 100.0,
+                                      float(getattr(config, "bezier_ctrl_y", 16.0)),
+                                      self._on_bezier_ctrl_y_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Speed", "bezier_speed", 0.1, 20.0,
+                                      float(getattr(config, "bezier_speed", 1.0)),
+                                      self._on_bezier_speed_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Delay (ms)", "bezier_delay", 0.1, 50.0,
+                                      float(getattr(config, "bezier_delay", 0.002)) * 1000,
+                                      self._on_bezier_delay_changed, is_float=True)
+            self._add_spacer_in_frame(sec_params)
+            self._add_subtitle_in_frame(sec_params, "FOV")
+            self._add_slider_in_frame(sec_params, "FOV Size", "fovsize", 1, 1000,
+                                      float(getattr(config, "fovsize", 300)),
+                                      self._on_fovsize_changed)
+            self._add_ads_fov_controls_in_frame(sec_params, is_sec=False)
+        
+        # éˆ¹â‚¬éˆ¹â‚¬ OFFSET (collapsible) éˆ¹â‚¬éˆ¹â‚¬
+        sec_offset = self._create_collapsible_section(tab_targeting, "Offset", initially_open=False)
+        self._add_slider_in_frame(sec_offset, "X-Offset", "aim_offsetX", -100, 100,
+                                  float(getattr(config, "aim_offsetX", 0)),
+                                  self._on_aim_offsetX_changed)
+        self._add_slider_in_frame(sec_offset, "Y-Offset", "aim_offsetY", -100, 100,
+                                  float(getattr(config, "aim_offsetY", 0)),
+                                  self._on_aim_offsetY_changed)
+        
+        # éˆ¹â‚¬éˆ¹â‚¬ AIM TYPE (collapsible) éˆ¹â‚¬éˆ¹â‚¬
+        sec_aim_type = self._create_collapsible_section(tab_targeting, "Aim Type", initially_open=False)
+        self.aim_type_option = self._add_option_row_in_frame(sec_aim_type, "Target", ["head", "body", "nearest"], self._on_aim_type_selected)
+        self._option_widgets["aim_type"] = self.aim_type_option
+        current_aim_type = getattr(config, "aim_type", "head")
+        self.aim_type_option.set(current_aim_type)
+        
+        # éˆ¹â‚¬éˆ¹â‚¬ ACTIVATION (collapsible) éˆ¹â‚¬éˆ¹â‚¬
+        sec_activation = self._create_collapsible_section(tab_activation, "Activation", initially_open=False)
+        current_btn = self._ads_binding_to_display(getattr(config, "selected_mouse_button", 3))
+        self.aim_key_bind_button = self._add_bind_capture_row_in_frame(
+            sec_activation,
+            "Keybind",
+            current_btn,
+            lambda: self._start_aim_key_capture(is_sec=False),
+        )
+        
+        # Activation Type
+        activation_types = ["Hold to Enable", "Hold to Disable", "Toggle", "Press to Enable"]
+        activation_type_map = {
+            "Hold to Enable": "hold_enable",
+            "Hold to Disable": "hold_disable",
+            "Toggle": "toggle",
+            "Press to Enable": "use_enable"
+        }
+        self.aimbot_activation_type_option = self._add_option_row_in_frame(sec_activation, "Type", activation_types, self._on_aimbot_activation_type_selected)
+        self._option_widgets["aimbot_activation_type"] = self.aimbot_activation_type_option
+        current_activation_type = getattr(config, "aimbot_activation_type", "hold_enable")
+        # é™å¶…æ‚œé„çŠ²çš é”›æ°¬ç·¸é–°å¶‡ç–†éŠå…¼å£˜é’ä¼´â€™ç»€å“„æ‚•ç»‹?
+        for display_name, config_value in activation_type_map.items():
+            if config_value == current_activation_type:
+                self.aimbot_activation_type_option.set(display_name)
+                break
+        else:
+            self.aimbot_activation_type_option.set("Hold to Enable")
+
+        current_ads_key = self._ads_binding_to_display(getattr(config, "ads_key", "Right Mouse Button"))
+        self.ads_key_bind_button = self._add_bind_capture_row_in_frame(
+            sec_activation,
+            "ADS Keybind",
+            current_ads_key,
+            lambda: self._start_ads_key_capture(is_sec=False),
+        )
+        self.ads_key_type_option = self._add_option_row_in_frame(
+            sec_activation,
+            "ADS Key Type",
+            list(ADS_KEY_TYPE_DISPLAY_TO_VALUE.keys()),
+            self._on_ads_key_type_selected,
+        )
+        self._option_widgets["ads_key_type"] = self.ads_key_type_option
+        current_ads_key_type = str(getattr(config, "ads_key_type", "hold")).strip().lower()
+        self.ads_key_type_option.set(ADS_KEY_TYPE_VALUE_TO_DISPLAY.get(current_ads_key_type, "Hold"))
+
+    def _show_sec_aimbot_tab(self):
+        self._active_tab_name = "Sec Aimbot"
+        self._clear_content()
+        self._add_title("Secondary Aimbot Suite")
+        sec_tabs = self._create_category_tabs(["Engine", "Precision", "Hotkeys"])
+        tab_core = sec_tabs["Engine"]
+        tab_targeting = sec_tabs["Precision"]
+        tab_activation = sec_tabs["Hotkeys"]
+
+        sec_core = self._create_collapsible_section(tab_core, "Core Controls", initially_open=True)
+        self.var_enableaim_sec = tk.BooleanVar(value=getattr(config, "enableaim_sec", False))
+        self._add_switch_in_frame(sec_core, "Enable Sec Aimbot", self.var_enableaim_sec, self._on_enableaim_sec_changed)
+        self._checkbox_vars["enableaim_sec"] = self.var_enableaim_sec
+        
+        # Anti-Smoke Switch for Sec Aimbot
+        self.var_anti_smoke_sec = tk.BooleanVar(value=getattr(config, "anti_smoke_enabled_sec", False))
+        self._add_switch_in_frame(sec_core, "Enable Anti-Smoke", self.var_anti_smoke_sec, self._on_anti_smoke_sec_changed)
+        self._checkbox_vars["anti_smoke_enabled_sec"] = self.var_anti_smoke_sec
+        
+        # éˆ¹â‚¬éˆ¹â‚¬ OPERATION MODE (collapsible) éˆ¹â‚¬éˆ¹â‚¬
+        sec_mode = self._create_collapsible_section(tab_core, "Operation Mode", initially_open=True)
+        self.mode_option_sec = self._add_option_row_in_frame(sec_mode, "Mode", ["Normal", "Silent", "NCAF", "WindMouse", "Bezier"], self._on_mode_sec_selected)
+        self._option_widgets["mode_sec"] = self.mode_option_sec
+        current_mode_sec = getattr(config, "mode_sec", "Normal")
+        self.mode_option_sec.set(current_mode_sec)
+        
+        # éˆ¹â‚¬éˆ¹â‚¬ MODE PARAMETERS (collapsible) éˆ¹â‚¬éˆ¹â‚¬
+        sec_params = self._create_collapsible_section(
+            tab_core,
+            f"{current_mode_sec} Parameters",
+            initially_open=True,
+            state_key="mode_parameters",
+        )
+        
+        if current_mode_sec == "Normal":
+            self._add_subtitle_in_frame(sec_params, "SENSITIVITY")
+            self._add_slider_in_frame(sec_params, "X-Speed", "normal_x_speed_sec", 0.1, 2000,
+                                      float(getattr(config, "normal_x_speed_sec", 2)),
+                                      self._on_normal_x_speed_sec_changed)
+            self._add_slider_in_frame(sec_params, "Y-Speed", "normal_y_speed_sec", 0.1, 2000,
+                                      float(getattr(config, "normal_y_speed_sec", 2)),
+                                      self._on_normal_y_speed_sec_changed)
+            self._add_slider_in_frame(sec_params, "Smoothing", "normalsmooth_sec", 1, 30,
+                                      float(getattr(config, "normalsmooth_sec", 20)),
+                                      self._on_config_normal_smooth_sec_changed)
+            self._add_spacer_in_frame(sec_params)
+            self._add_subtitle_in_frame(sec_params, "FOV")
+            self._add_slider_in_frame(sec_params, "FOV Size", "fovsize_sec", 1, 1000,
+                                      float(getattr(config, "fovsize_sec", 150)),
+                                      self._on_fovsize_sec_changed)
+            self._add_slider_in_frame(sec_params, "FOV Smooth", "normalsmoothfov_sec", 1, 30,
+                                      float(getattr(config, "normalsmoothfov_sec", 20)),
+                                      self._on_config_normal_smoothfov_sec_changed)
+            self._add_ads_fov_controls_in_frame(sec_params, is_sec=True)
+        
+        elif current_mode_sec == "Silent":
+            self._add_subtitle_in_frame(sec_params, "SENSITIVITY")
+            self._add_slider_in_frame(sec_params, "X-Speed", "normal_x_speed_sec", 0.1, 2000,
+                                      float(getattr(config, "normal_x_speed_sec", 2)),
+                                      self._on_normal_x_speed_sec_changed)
+            self._add_slider_in_frame(sec_params, "Y-Speed", "normal_y_speed_sec", 0.1, 2000,
+                                      float(getattr(config, "normal_y_speed_sec", 2)),
+                                      self._on_normal_y_speed_sec_changed)
+            self._add_spacer_in_frame(sec_params)
+            self._add_subtitle_in_frame(sec_params, "FOV")
+            self._add_slider_in_frame(sec_params, "FOV Size", "fovsize_sec", 1, 1000,
+                                      float(getattr(config, "fovsize_sec", 150)),
+                                      self._on_fovsize_sec_changed)
+            self._add_ads_fov_controls_in_frame(sec_params, is_sec=True)
+        
+        elif current_mode_sec == "NCAF":
+            self._add_subtitle_in_frame(sec_params, "NCAF PARAMETERS")
+            self._add_slider_in_frame(sec_params, "Alpha (Speed Curve)", "ncaf_alpha_sec", 0.1, 5.0,
+                                      float(getattr(config, "ncaf_alpha_sec", 1.5)),
+                                      self._on_ncaf_alpha_sec_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Snap Boost Factor", "ncaf_snap_boost_sec", 0.01, 2.0,
+                                      float(getattr(config, "ncaf_snap_boost_sec", 0.3)),
+                                      self._on_ncaf_snap_boost_sec_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Max Step", "ncaf_max_step_sec", 1, 200,
+                                      float(getattr(config, "ncaf_max_step_sec", 50)),
+                                      self._on_ncaf_max_step_sec_changed)
+            self._add_slider_in_frame(sec_params, "Min Speed Multiplier", "ncaf_min_speed_multiplier_sec", 0.01, 1.0,
+                                      float(getattr(config, "ncaf_min_speed_multiplier_sec", 0.01)),
+                                      self._on_ncaf_min_speed_multiplier_sec_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Max Speed Multiplier", "ncaf_max_speed_multiplier_sec", 1.0, 20.0,
+                                      float(getattr(config, "ncaf_max_speed_multiplier_sec", 10.0)),
+                                      self._on_ncaf_max_speed_multiplier_sec_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Prediction Interval (ms)", "ncaf_prediction_interval_sec", 1, 100,
+                                      float(getattr(config, "ncaf_prediction_interval_sec", 0.016)) * 1000,
+                                      self._on_ncaf_prediction_interval_sec_changed, is_float=True)
+            self._add_spacer_in_frame(sec_params)
+            self._add_subtitle_in_frame(sec_params, "FOV")
+            self._add_slider_in_frame(sec_params, "Snap Radius (Outer)", "ncaf_snap_radius_sec", 10, 500,
+                                      float(getattr(config, "ncaf_snap_radius_sec", 150)),
+                                      self._on_ncaf_snap_radius_sec_changed)
+            self._add_slider_in_frame(sec_params, "Near Radius (Inner)", "ncaf_near_radius_sec", 5, 400,
+                                      float(getattr(config, "ncaf_near_radius_sec", 50)),
+                                      self._on_ncaf_near_radius_sec_changed)
+            self._add_ads_fov_controls_in_frame(sec_params, is_sec=True)
+        
+        elif current_mode_sec == "WindMouse":
+            self._add_subtitle_in_frame(sec_params, "WINDMOUSE PARAMETERS")
+            self._add_slider_in_frame(sec_params, "Gravity", "wm_gravity_sec", 0.1, 30.0,
+                                      float(getattr(config, "wm_gravity_sec", 9.0)),
+                                      self._on_wm_gravity_sec_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Wind", "wm_wind_sec", 0.1, 20.0,
+                                      float(getattr(config, "wm_wind_sec", 3.0)),
+                                      self._on_wm_wind_sec_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Max Step", "wm_max_step_sec", 1, 100,
+                                      float(getattr(config, "wm_max_step_sec", 15)),
+                                      self._on_wm_max_step_sec_changed)
+            self._add_slider_in_frame(sec_params, "Min Step", "wm_min_step_sec", 0.1, 20,
+                                      float(getattr(config, "wm_min_step_sec", 2)),
+                                      self._on_wm_min_step_sec_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Min Delay (ms)", "wm_min_delay_sec", 0.1, 50,
+                                      float(getattr(config, "wm_min_delay_sec", 0.001)) * 1000,
+                                      self._on_wm_min_delay_sec_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Max Delay (ms)", "wm_max_delay_sec", 0.1, 50,
+                                      float(getattr(config, "wm_max_delay_sec", 0.003)) * 1000,
+                                      self._on_wm_max_delay_sec_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Distance Threshold", "wm_distance_threshold_sec", 10, 200,
+                                      float(getattr(config, "wm_distance_threshold_sec", 50)),
+                                      self._on_wm_distance_threshold_sec_changed, is_float=True)
+            self._add_spacer_in_frame(sec_params)
+            self._add_subtitle_in_frame(sec_params, "FOV")
+            self._add_slider_in_frame(sec_params, "FOV Size", "fovsize_sec", 1, 1000,
+                                      float(getattr(config, "fovsize_sec", 150)),
+                                      self._on_fovsize_sec_changed)
+            self._add_ads_fov_controls_in_frame(sec_params, is_sec=True)
+        
+        elif current_mode_sec == "Bezier":
+            self._add_subtitle_in_frame(sec_params, "BEZIER PARAMETERS")
+            self._add_slider_in_frame(sec_params, "Segments", "bezier_segments_sec", 1, 30,
+                                      float(getattr(config, "bezier_segments_sec", 8)),
+                                      self._on_bezier_segments_sec_changed)
+            self._add_slider_in_frame(sec_params, "Ctrl X", "bezier_ctrl_x_sec", 0.0, 100.0,
+                                      float(getattr(config, "bezier_ctrl_x_sec", 16.0)),
+                                      self._on_bezier_ctrl_x_sec_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Ctrl Y", "bezier_ctrl_y_sec", 0.0, 100.0,
+                                      float(getattr(config, "bezier_ctrl_y_sec", 16.0)),
+                                      self._on_bezier_ctrl_y_sec_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Speed", "bezier_speed_sec", 0.1, 20.0,
+                                      float(getattr(config, "bezier_speed_sec", 1.0)),
+                                      self._on_bezier_speed_sec_changed, is_float=True)
+            self._add_slider_in_frame(sec_params, "Delay (ms)", "bezier_delay_sec", 0.1, 50.0,
+                                      float(getattr(config, "bezier_delay_sec", 0.002)) * 1000,
+                                      self._on_bezier_delay_sec_changed, is_float=True)
+            self._add_spacer_in_frame(sec_params)
+            self._add_subtitle_in_frame(sec_params, "FOV")
+            self._add_slider_in_frame(sec_params, "FOV Size", "fovsize_sec", 1, 1000,
+                                      float(getattr(config, "fovsize_sec", 150)),
+                                      self._on_fovsize_sec_changed)
+            self._add_ads_fov_controls_in_frame(sec_params, is_sec=True)
+        
+        # éˆ¹â‚¬éˆ¹â‚¬ OFFSET (collapsible) éˆ¹â‚¬éˆ¹â‚¬
+        sec_offset = self._create_collapsible_section(tab_targeting, "Offset", initially_open=False)
+        self._add_slider_in_frame(sec_offset, "X-Offset", "aim_offsetX_sec", -100, 100,
+                                  float(getattr(config, "aim_offsetX_sec", 0)),
+                                  self._on_aim_offsetX_sec_changed)
+        self._add_slider_in_frame(sec_offset, "Y-Offset", "aim_offsetY_sec", -100, 100,
+                                  float(getattr(config, "aim_offsetY_sec", 0)),
+                                  self._on_aim_offsetY_sec_changed)
+        
+        # éˆ¹â‚¬éˆ¹â‚¬ AIM TYPE (collapsible) éˆ¹â‚¬éˆ¹â‚¬
+        sec_aim_type = self._create_collapsible_section(tab_targeting, "Aim Type", initially_open=False)
+        self.aim_type_option_sec = self._add_option_row_in_frame(sec_aim_type, "Target", ["head", "body", "nearest"], self._on_aim_type_sec_selected)
+        self._option_widgets["aim_type_sec"] = self.aim_type_option_sec
+        current_aim_type_sec = getattr(config, "aim_type_sec", "head")
+        self.aim_type_option_sec.set(current_aim_type_sec)
+        
+        # éˆ¹â‚¬éˆ¹â‚¬ ACTIVATION (collapsible) éˆ¹â‚¬éˆ¹â‚¬
+        sec_activation = self._create_collapsible_section(tab_activation, "Activation", initially_open=False)
+        current_btn_sec = self._ads_binding_to_display(getattr(config, "selected_mouse_button_sec", 2))
+        self.aim_key_bind_button_sec = self._add_bind_capture_row_in_frame(
+            sec_activation,
+            "Keybind",
+            current_btn_sec,
+            lambda: self._start_aim_key_capture(is_sec=True),
+        )
+        
+        # Activation Type
+        activation_types = ["Hold to Enable", "Hold to Disable", "Toggle", "Press to Enable"]
+        activation_type_map = {
+            "Hold to Enable": "hold_enable",
+            "Hold to Disable": "hold_disable",
+            "Toggle": "toggle",
+            "Press to Enable": "use_enable"
+        }
+        self.aimbot_activation_type_option_sec = self._add_option_row_in_frame(sec_activation, "Type", activation_types, self._on_aimbot_activation_type_sec_selected)
+        self._option_widgets["aimbot_activation_type_sec"] = self.aimbot_activation_type_option_sec
+        current_activation_type_sec = getattr(config, "aimbot_activation_type_sec", "hold_enable")
+        # é™å¶…æ‚œé„çŠ²çš é”›æ°¬ç·¸é–°å¶‡ç–†éŠå…¼å£˜é’ä¼´â€™ç»€å“„æ‚•ç»‹?
+        for display_name, config_value in activation_type_map.items():
+            if config_value == current_activation_type_sec:
+                self.aimbot_activation_type_option_sec.set(display_name)
+                break
+        else:
+            self.aimbot_activation_type_option_sec.set("Hold to Enable")
+
+        current_ads_key_sec = self._ads_binding_to_display(getattr(config, "ads_key_sec", "Right Mouse Button"))
+        self.ads_key_bind_button_sec = self._add_bind_capture_row_in_frame(
+            sec_activation,
+            "ADS Keybind",
+            current_ads_key_sec,
+            lambda: self._start_ads_key_capture(is_sec=True),
+        )
+        self.ads_key_type_option_sec = self._add_option_row_in_frame(
+            sec_activation,
+            "ADS Key Type",
+            list(ADS_KEY_TYPE_DISPLAY_TO_VALUE.keys()),
+            self._on_ads_key_type_sec_selected,
+        )
+        self._option_widgets["ads_key_type_sec"] = self.ads_key_type_option_sec
+        current_ads_key_type_sec = str(getattr(config, "ads_key_type_sec", "hold")).strip().lower()
+        self.ads_key_type_option_sec.set(
+            ADS_KEY_TYPE_VALUE_TO_DISPLAY.get(current_ads_key_type_sec, "Hold")
+        )
+
+    def _show_tb_tab(self):
+        self._active_tab_name = "Trigger"
+        self._clear_content()
+        self._add_title("Trigger Automation")
+        trigger_tabs = self._create_category_tabs(["Engine", "Delays", "Hotkeys", "Strafe"])
+        tab_core = trigger_tabs["Engine"]
+        tab_timing = trigger_tabs["Delays"]
+        tab_activation = trigger_tabs["Hotkeys"]
+        tab_movement = trigger_tabs["Strafe"]
+
+        current_trigger_type = str(getattr(config, "trigger_type", "current")).strip().lower()
+        if current_trigger_type not in TRIGGER_TYPE_DISPLAY:
+            current_trigger_type = "current"
+            config.trigger_type = current_trigger_type
+
+        sec_core = self._create_collapsible_section(tab_core, "Core", initially_open=True)
+        self.var_enabletb = tk.BooleanVar(value=getattr(config, "enabletb", False))
+        self._add_switch_in_frame(sec_core, "Enable Triggerbot", self.var_enabletb, self._on_enabletb_changed)
+        self._checkbox_vars["enabletb"] = self.var_enabletb
+
+        self.trigger_type_option = self._add_option_row_in_frame(
+            sec_core,
+            "Trigger Type",
+            list(TRIGGER_TYPE_DISPLAY.values()),
+            self._on_trigger_type_selected,
+        )
+        self._option_widgets["trigger_type"] = self.trigger_type_option
+        self.trigger_type_option.set(TRIGGER_TYPE_DISPLAY.get(current_trigger_type, "Classic Trigger"))
+
+        if current_trigger_type == "rgb":
+            sec_rgb = self._create_collapsible_section(tab_timing, "RGB Parameters", initially_open=True)
+
+            self._add_slider_in_frame(
+                sec_rgb,
+                "FOV Size",
+                "tbfovsize",
+                1,
+                300,
+                float(getattr(config, "tbfovsize", 70)),
+                self._on_tbfovsize_changed,
+            )
+            self._add_trigger_ads_fov_controls_in_frame(sec_rgb)
+
+            self.rgb_color_profile_option = self._add_option_row_in_frame(
+                sec_rgb,
+                "RGB Preset",
+                list(RGB_TRIGGER_PROFILE_DISPLAY.values()),
+                self._on_rgb_color_profile_selected,
+            )
+            self._option_widgets["rgb_color_profile"] = self.rgb_color_profile_option
+            current_rgb_profile = str(getattr(config, "rgb_color_profile", "purple")).strip().lower()
+            if current_rgb_profile not in RGB_TRIGGER_PROFILE_DISPLAY:
+                current_rgb_profile = "purple"
+                config.rgb_color_profile = "purple"
+            self.rgb_color_profile_option.set(
+                RGB_TRIGGER_PROFILE_DISPLAY.get(current_rgb_profile, "Purple")
+            )
+
+            # Custom RGB Settings (collapsible, only show when custom is selected)
+            self.custom_rgb_section, self.custom_rgb_container = self._create_collapsible_section(
+                sec_rgb, "Custom RGB", initially_open=True, auto_pack=False
+            )
+            if current_rgb_profile == "custom":
+                self.custom_rgb_container.pack(fill="x", pady=(5, 0))
+
+            # R, G, B sliders
+            self._add_slider_in_frame(
+                self.custom_rgb_section,
+                "R",
+                "rgb_custom_r",
+                0,
+                255,
+                int(getattr(config, "rgb_custom_r", 161)),
+                lambda v: self._on_rgb_custom_changed("rgb_custom_r", v),
+            )
+            self._add_slider_in_frame(
+                self.custom_rgb_section,
+                "G",
+                "rgb_custom_g",
+                0,
+                255,
+                int(getattr(config, "rgb_custom_g", 69)),
+                lambda v: self._on_rgb_custom_changed("rgb_custom_g", v),
+            )
+            self._add_slider_in_frame(
+                self.custom_rgb_section,
+                "B",
+                "rgb_custom_b",
+                0,
+                255,
+                int(getattr(config, "rgb_custom_b", 163)),
+                lambda v: self._on_rgb_custom_changed("rgb_custom_b", v),
+            )
+
+            # Color preview frame
+            preview_frame = ctk.CTkFrame(self.custom_rgb_section, fg_color="transparent")
+            preview_frame.pack(fill="x", pady=(10, 5))
+            
+            ctk.CTkLabel(
+                preview_frame,
+                text="Color Preview",
+                font=FONT_MAIN,
+                text_color=COLOR_TEXT
+            ).pack(side="left")
+            
+            # Calculate initial RGB color hex
+            r = max(0, min(255, int(getattr(config, "rgb_custom_r", 161))))
+            g = max(0, min(255, int(getattr(config, "rgb_custom_g", 69))))
+            b = max(0, min(255, int(getattr(config, "rgb_custom_b", 163))))
+            initial_color_hex = f"#{r:02x}{g:02x}{b:02x}"
+            
+            # Color preview box
+            self.rgb_color_preview = ctk.CTkFrame(
+                preview_frame,
+                width=100,
+                height=30,
+                corner_radius=4,
+                fg_color=initial_color_hex,
+                border_width=1,
+                border_color=COLOR_BORDER
+            )
+            self.rgb_color_preview.pack(side="right", padx=(10, 0))
+
+            self._add_range_slider_in_frame(
+                sec_rgb,
+                "Delay Range (s)",
+                "rgb_tbdelay",
+                0.0,
+                1.0,
+                float(getattr(config, "rgb_tbdelay_min", 0.08)),
+                float(getattr(config, "rgb_tbdelay_max", 0.15)),
+                self._on_rgb_tbdelay_range_changed,
+                is_float=True,
+            )
+            self._add_range_slider_in_frame(
+                sec_rgb,
+                "Hold Range (ms)",
+                "rgb_tbhold",
+                5,
+                500,
+                float(getattr(config, "rgb_tbhold_min", 40)),
+                float(getattr(config, "rgb_tbhold_max", 60)),
+                self._on_rgb_tbhold_range_changed,
+                is_float=False,
+            )
+            self._add_range_slider_in_frame(
+                sec_rgb,
+                "Cooldown Range (s)",
+                "rgb_tbcooldown",
+                0.0,
+                5.0,
+                float(getattr(config, "rgb_tbcooldown_min", 0.0)),
+                float(getattr(config, "rgb_tbcooldown_max", 0.0)),
+                self._on_rgb_tbcooldown_range_changed,
+                is_float=True,
+            )
+        else:
+            sec_params = self._create_collapsible_section(tab_timing, "Parameters", initially_open=True)
+            self._add_slider_in_frame(
+                sec_params,
+                "FOV Size",
+                "tbfovsize",
+                1,
+                300,
+                float(getattr(config, "tbfovsize", 70)),
+                self._on_tbfovsize_changed,
+            )
+            self._add_trigger_ads_fov_controls_in_frame(sec_params)
+            self._add_range_slider_in_frame(
+                sec_params,
+                "Delay Range (s)",
+                "tbdelay",
+                0.0,
+                1.0,
+                float(getattr(config, "tbdelay_min", 0.08)),
+                float(getattr(config, "tbdelay_max", 0.15)),
+                self._on_tbdelay_range_changed,
+                is_float=True,
+            )
+            self._add_range_slider_in_frame(
+                sec_params,
+                "Hold Range (ms)",
+                "tbhold",
+                5,
+                500,
+                float(getattr(config, "tbhold_min", 40)),
+                float(getattr(config, "tbhold_max", 60)),
+                self._on_tbhold_range_changed,
+                is_float=False,
+            )
+
+            sec_conditions = self._create_collapsible_section(
+                tab_timing,
+                "Trigger Conditions",
+                initially_open=False,
+            )
+            self._add_slider_in_frame(
+                sec_conditions,
+                "Min Pixels",
+                "trigger_min_pixels",
+                1,
+                200,
+                int(getattr(config, "trigger_min_pixels", 4)),
+                self._on_trigger_min_pixels_changed,
+                is_float=False,
+            )
+            self._add_slider_in_frame(
+                sec_conditions,
+                "Min Ratio",
+                "trigger_min_ratio",
+                0.0,
+                1.0,
+                float(getattr(config, "trigger_min_ratio", 0.03)),
+                self._on_trigger_min_ratio_changed,
+                is_float=True,
+            )
+            self._add_slider_in_frame(
+                sec_conditions,
+                "Confirm Frames",
+                "trigger_confirm_frames",
+                1,
+                10,
+                int(getattr(config, "trigger_confirm_frames", 2)),
+                self._on_trigger_confirm_frames_changed,
+                is_float=False,
+            )
+
+            sec_burst = self._create_collapsible_section(tab_timing, "Burst Settings", initially_open=False)
+            self._add_range_slider_in_frame(
+                sec_burst,
+                "Cooldown Range (s)",
+                "tbcooldown",
+                0.0,
+                5.0,
+                float(getattr(config, "tbcooldown_min", 0.0)),
+                float(getattr(config, "tbcooldown_max", 0.0)),
+                self._on_tbcooldown_range_changed,
+                is_float=True,
+            )
+            self._add_range_slider_in_frame(
+                sec_burst,
+                "Burst Count Range",
+                "tbburst_count",
+                1,
+                10,
+                int(getattr(config, "tbburst_count_min", 1)),
+                int(getattr(config, "tbburst_count_max", 1)),
+                self._on_tbburst_count_range_changed,
+                is_float=False,
+            )
+            self._add_range_slider_in_frame(
+                sec_burst,
+                "Burst Interval Range (ms)",
+                "tbburst_interval",
+                0,
+                500,
+                float(getattr(config, "tbburst_interval_min", 0.0)),
+                float(getattr(config, "tbburst_interval_max", 0.0)),
+                self._on_tbburst_interval_range_changed,
+                is_float=True,
+            )
+
+        sec_activation = self._create_collapsible_section(tab_activation, "Activation", initially_open=False)
+        current_tb_btn = self._ads_binding_to_display(getattr(config, "selected_tb_btn", 3))
+        self.tb_key_bind_button = self._add_bind_capture_row_in_frame(
+            sec_activation,
+            "Keybind",
+            current_tb_btn,
+            self._start_trigger_key_capture,
+        )
+
+        trigger_activation_types = ["Hold to Enable", "Hold to Disable", "Toggle"]
+        self.trigger_activation_type_option = self._add_option_row_in_frame(
+            sec_activation,
+            "Trigger Mode",
+            trigger_activation_types,
+            self._on_trigger_activation_type_selected,
+        )
+        self._option_widgets["trigger_activation_type"] = self.trigger_activation_type_option
+        current_trigger_activation_type = str(
+            getattr(config, "trigger_activation_type", "hold_enable")
+        ).strip().lower()
+        trigger_activation_display = {
+            "hold_enable": "Hold to Enable",
+            "hold_disable": "Hold to Disable",
+            "toggle": "Toggle",
+        }
+        self.trigger_activation_type_option.set(
+            trigger_activation_display.get(current_trigger_activation_type, "Hold to Enable")
+        )
+
+        current_trigger_ads_key = self._ads_binding_to_display(
+            getattr(config, "trigger_ads_key", "Right Mouse Button")
+        )
+        self.trigger_ads_key_bind_button = self._add_bind_capture_row_in_frame(
+            sec_activation,
+            "ADS Keybind",
+            current_trigger_ads_key,
+            self._start_trigger_ads_key_capture,
+        )
+        self.trigger_ads_key_type_option = self._add_option_row_in_frame(
+            sec_activation,
+            "ADS Key Type",
+            list(ADS_KEY_TYPE_DISPLAY_TO_VALUE.keys()),
+            self._on_trigger_ads_key_type_selected,
+        )
+        self._option_widgets["trigger_ads_key_type"] = self.trigger_ads_key_type_option
+        current_trigger_ads_key_type = str(
+            getattr(config, "trigger_ads_key_type", "hold")
+        ).strip().lower()
+        self.trigger_ads_key_type_option.set(
+            ADS_KEY_TYPE_VALUE_TO_DISPLAY.get(current_trigger_ads_key_type, "Hold")
+        )
+
+        if self._supports_trigger_strafe_ui():
+            sec_strafe_helper = self._create_collapsible_section(
+                tab_movement,
+                "Strafe Helper",
+                initially_open=False,
+            )
+            self.trigger_strafe_mode_option = self._add_option_row_in_frame(
+                sec_strafe_helper,
+                "Mode",
+                list(TRIGGER_STRAFE_MODE_DISPLAY.values()),
+                self._on_trigger_strafe_mode_selected,
+            )
+            self._option_widgets["trigger_strafe_mode"] = self.trigger_strafe_mode_option
+            current_strafe_mode = str(getattr(config, "trigger_strafe_mode", "off")).strip().lower()
+            if current_strafe_mode not in TRIGGER_STRAFE_MODE_DISPLAY:
+                current_strafe_mode = "off"
+                config.trigger_strafe_mode = "off"
+            self.trigger_strafe_mode_option.set(
+                TRIGGER_STRAFE_MODE_DISPLAY.get(current_strafe_mode, "Off")
+            )
+
+            if current_strafe_mode == "auto":
+                self._add_slider_in_frame(
+                    sec_strafe_helper,
+                    "Auto Lead (ms)",
+                    "trigger_strafe_auto_lead_ms",
+                    0,
+                    50,
+                    int(getattr(config, "trigger_strafe_auto_lead_ms", 8)),
+                    self._on_trigger_strafe_auto_lead_ms_changed,
+                    is_float=False,
+                )
+            elif current_strafe_mode == "manual_wait":
+                self._add_slider_in_frame(
+                    sec_strafe_helper,
+                    "Neutral Wait (ms)",
+                    "trigger_strafe_manual_neutral_ms",
+                    0,
+                    300,
+                    int(getattr(config, "trigger_strafe_manual_neutral_ms", 0)),
+                    self._on_trigger_strafe_manual_neutral_ms_changed,
+                    is_float=False,
+                )
+        else:
+            config.trigger_strafe_mode = "off"
+
+    def _show_rcs_tab(self):
+        self._active_tab_name = "RCS"
+        self._clear_content()
+        self._add_title("Recoil Control Engine")
+        rcs_tabs = self._create_category_tabs(["Engine", "Timing", "Recovery"])
+        tab_core = rcs_tabs["Engine"]
+        tab_timing = rcs_tabs["Timing"]
+        tab_release = rcs_tabs["Recovery"]
+
+        sec_core = self._create_collapsible_section(tab_core, "Recoil Engine", initially_open=True)
+        self.var_enablercs = tk.BooleanVar(value=getattr(config, "enablercs", False))
+        self._add_switch_in_frame(sec_core, "Enable RCS", self.var_enablercs, self._on_enablercs_changed)
+        self._checkbox_vars["enablercs"] = self.var_enablercs
+        self._add_slider_in_frame(
+            sec_core,
+            "Pull Speed",
+            "rcs_pull_speed",
+            1,
+            20,
+            int(getattr(config, "rcs_pull_speed", 10)),
+            self._on_rcs_pull_speed_changed,
+            is_float=False,
+        )
+
+        sec_timing = self._create_collapsible_section(tab_timing, "Timing Gates", initially_open=True)
+        self._add_slider_in_frame(
+            sec_timing,
+            "Activation Delay (ms)",
+            "rcs_activation_delay",
+            50,
+            500,
+            int(getattr(config, "rcs_activation_delay", 100)),
+            self._on_rcs_activation_delay_changed,
+            is_float=False,
+        )
+        self._add_slider_in_frame(
+            sec_timing,
+            "Rapid Click Threshold (ms)",
+            "rcs_rapid_click_threshold",
+            100,
+            1000,
+            int(getattr(config, "rcs_rapid_click_threshold", 200)),
+            self._on_rcs_rapid_click_threshold_changed,
+            is_float=False,
+        )
+
+        sec_release = self._create_collapsible_section(tab_release, "Y-Axis Release", initially_open=True)
+        self.var_rcs_release_y_enabled = tk.BooleanVar(value=getattr(config, "rcs_release_y_enabled", False))
+        self._add_switch_in_frame(
+            sec_release,
+            "Release Y-Axis on Fire",
+            self.var_rcs_release_y_enabled,
+            self._on_rcs_release_y_enabled_changed,
+        )
+        self._checkbox_vars["rcs_release_y_enabled"] = self.var_rcs_release_y_enabled
+        self._add_slider_in_frame(
+            sec_release,
+            "Release Duration (s)",
+            "rcs_release_y_duration",
+            0.1,
+            5.0,
+            float(getattr(config, "rcs_release_y_duration", 1.0)),
+            self._on_rcs_release_y_duration_changed,
+            is_float=True,
+        )
+
+    def _show_config_tab(self):
+        self._active_tab_name = "Config"
+        self._clear_content()
+        self._add_title("Profile Workspace")
+
+        os.makedirs("configs", exist_ok=True)
+
+        config_tabs = self._create_category_tabs(["Profiles", "Sync", "Logs"])
+        tab_profiles = config_tabs["Profiles"]
+        tab_transfer = config_tabs["Sync"]
+        tab_activity = config_tabs["Logs"]
+
+        sec_profiles = self._create_collapsible_section(tab_profiles, "Active Profile", initially_open=True)
+        self.config_option = self._add_option_menu([], self._on_config_selected, parent=sec_profiles)
+        self.config_option.pack(fill="x", pady=(2, 8))
+
+        profile_actions = ctk.CTkFrame(sec_profiles, fg_color="transparent")
+        profile_actions.pack(fill="x")
+        for col in range(2):
+            profile_actions.grid_columnconfigure(col, weight=1)
+        profile_buttons = [
+            ("SAVE", self._save_config),
+            ("LOAD", self._load_selected_config),
+            ("CREATE", self._save_new_config),
+            ("DELETE", self._delete_selected_config),
+        ]
+        for idx, (label, action) in enumerate(profile_buttons):
+            row = idx // 2
+            col = idx % 2
+            self._add_text_button(profile_actions, label, action).grid(
+                row=row,
+                column=col,
+                padx=4,
+                pady=4,
+                sticky="ew",
+            )
+
+        sec_transfer = self._create_collapsible_section(tab_transfer, "Import / Export", initially_open=True)
+        transfer_actions = ctk.CTkFrame(sec_transfer, fg_color="transparent")
+        transfer_actions.pack(fill="x")
+        for col in range(2):
+            transfer_actions.grid_columnconfigure(col, weight=1)
+        self._add_text_button(transfer_actions, "EXPORT", self._export_selected_config).grid(
+            row=0, column=0, padx=4, pady=4, sticky="ew"
+        )
+        self._add_text_button(transfer_actions, "IMPORT", self._import_config_file).grid(
+            row=0, column=1, padx=4, pady=4, sticky="ew"
+        )
+
+        sec_activity = self._create_collapsible_section(tab_activity, "Operation Log", initially_open=True)
+        self.config_log = ctk.CTkTextbox(
+            sec_activity,
+            height=220,
+            fg_color=COLOR_CARD_BG,
+            text_color=COLOR_TEXT_DIM,
+            font=("Consolas", 9),
+            corner_radius=10,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        self.config_log.pack(fill="x", pady=(2, 0))
+
+        self._refresh_config_list()
+        self.after(100, self._maybe_prompt_clipboard_config_import)
+
+    def _show_debug_tab(self):
+        self._active_tab_name = "Debug"
+        self._clear_content()
+        self._add_title("Diagnostics Console")
+        debug_tabs = self._create_category_tabs(["Input Probe", "Runtime Logs"])
+        tab_input = debug_tabs["Input Probe"]
+        tab_log = debug_tabs["Runtime Logs"]
+
+        if not hasattr(self, "debug_mouse_input_var"):
+            self.debug_mouse_input_var = tk.BooleanVar(value=False)
+
+        sec_input = self._create_collapsible_section(tab_input, "Mouse Input Debug", initially_open=True)
+        self._add_switch_in_frame(
+            sec_input,
+            "Enable Mouse Input Debug",
+            self.debug_mouse_input_var,
+            self._on_debug_mouse_input_changed,
+        )
+
+        self.debug_mouse_frame = ctk.CTkFrame(
+            sec_input,
+            fg_color=COLOR_CARD_BG,
+            corner_radius=10,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        self.debug_mouse_frame.pack(fill="x", pady=10)
+
+        self.debug_button_widgets = {}
+        button_names = {
+            0: "Left Button",
+            1: "Right Button",
+            2: "Middle Button",
+            3: "Side Button 4",
+            4: "Side Button 5",
+        }
+
+        for idx, name in button_names.items():
+            btn_frame = ctk.CTkFrame(self.debug_mouse_frame, fg_color="transparent")
+            btn_frame.pack(fill="x", padx=10, pady=4)
+            name_label = ctk.CTkLabel(
+                btn_frame,
+                text=name,
+                font=FONT_MAIN,
+                text_color=COLOR_TEXT,
+                width=120,
+                anchor="w"
+            )
+            name_label.pack(side="left", padx=5)
+
+            state_indicator = ctk.CTkLabel(
+                btn_frame,
+                text="o",
+                font=("Arial", 16),
+                text_color=COLOR_DANGER,
+                width=30,
+            )
+            state_indicator.pack(side="left", padx=5)
+
+            count_label = ctk.CTkLabel(
+                btn_frame,
+                text="Count: 0",
+                font=FONT_MAIN,
+                text_color=COLOR_TEXT_DIM,
+                anchor="w",
+            )
+            count_label.pack(side="left", padx=5, fill="x", expand=True)
+
+            self._add_text_button(
+                btn_frame,
+                "RESET",
+                lambda i=idx: self._reset_button_count(i),
+            ).pack(side="right", padx=5)
+
+            self.debug_button_widgets[idx] = {
+                "state_indicator": state_indicator,
+                "count_label": count_label,
+            }
+
+            try:
+                count = self.mouse_input_monitor.get_button_count(idx)
+                count_label.configure(text=f"Count: {count}")
+            except Exception:
+                pass
+
+        reset_all_frame = ctk.CTkFrame(self.debug_mouse_frame, fg_color="transparent")
+        reset_all_frame.pack(fill="x", padx=10, pady=(5, 2))
+        self._add_text_button(
+            reset_all_frame,
+            "RESET ALL",
+            self._reset_all_button_counts,
+        ).pack(side="right", padx=5)
+
+        if self.debug_mouse_input_var.get():
+            self.debug_mouse_frame.pack(fill="x", pady=10)
+            self.mouse_input_monitor.enable()
+        else:
+            self.debug_mouse_frame.pack_forget()
+
+        sec_logs = self._create_collapsible_section(tab_log, "Runtime Log", initially_open=True)
+        control_frame = ctk.CTkFrame(sec_logs, fg_color="transparent")
+        control_frame.pack(fill="x", pady=(2, 8))
+        self._add_text_button(control_frame, "CLEAR LOG", self._clear_debug_log).pack(side="left", padx=(0, 8))
+        self._add_text_button(control_frame, "OPEN WEBMENU", self._open_webmenu).pack(side="left", padx=(0, 8))
+
+        self.debug_log_count_label = ctk.CTkLabel(
+            control_frame,
+            text="Log Count: 0",
+            font=FONT_MAIN,
+            text_color=COLOR_TEXT_DIM,
+        )
+        self.debug_log_count_label.pack(side="right", padx=(10, 0))
+
+        self.debug_log_textbox = ctk.CTkTextbox(
+            sec_logs,
+            height=320,
+            fg_color=COLOR_CARD_BG,
+            text_color=COLOR_TEXT,
+            font=("Consolas", 9),
+            corner_radius=10,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        self.debug_log_textbox.pack(fill="x", pady=(0, 2))
+
+    def _open_webmenu(self):
+        ensure_running = getattr(self, "_ensure_webmenu_running", None)
+        if callable(ensure_running):
+            ok = bool(ensure_running())
+            if not ok:
+                log_print("[UI] WebMenu failed to start.")
+                return
+
+        host = str(getattr(config, "webmenu_host", "127.0.0.1")).strip() or "127.0.0.1"
+        if host in ("0.0.0.0", "::"):
+            host = "127.0.0.1"
+        try:
+            port = int(getattr(config, "webmenu_port", 8765))
+        except Exception:
+            port = 8765
+        port = max(1, min(65535, port))
+        url = f"http://{host}:{port}"
+        try:
+            webbrowser.open(url, new=2)
+            if not bool(getattr(config, "webmenu_enabled", False)):
+                log_print(f"[UI] WebMenu is disabled in config. URL opened anyway: {url}")
+        except Exception as e:
+            log_print(f"[UI] Failed to open WebMenu URL: {e}")
+        
+        # Initialize log display
+        self._update_debug_log()
+
+    # --- å¦¤ç”µå•Šç»²å‹ªæ¬¢å¦²å¬ªç¼“é£?---
+
+    def _add_title(self, text):
+        description_map = {
+            "General": "Core runtime controls, capture and targeting stack.",
+            "Main Aimbot": "Primary aiming engine, precision, activation flow.",
+            "Sec Aimbot": "Secondary aiming profile with independent behavior.",
+            "Trigger": "Shot automation logic, delays and key rules.",
+            "RCS": "Recoil balancing and release timing controls.",
+            "Config": "Profile management, import/export and activity feed.",
+            "Debug": "Input probe and runtime diagnostics stream.",
+        }
+        header = ctk.CTkFrame(
+            self.content_frame,
+            fg_color=COLOR_SURFACE,
+            corner_radius=14,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        header.pack(fill="x", pady=(4, 12))
+
+        title_row = ctk.CTkFrame(header, fg_color="transparent")
+        title_row.pack(fill="x", padx=12, pady=(9, 4))
+        ctk.CTkLabel(
+            title_row,
+            text=text.upper(),
+            font=("Segoe UI", 15, "bold"),
+            text_color=COLOR_TEXT,
+            anchor="w",
+        ).pack(side="left")
+
+        context_text = str(getattr(self, "_active_tab_name", "General")).upper()
+        ctk.CTkLabel(
+            title_row,
+            text=f"{context_text} HUB",
+            font=("Segoe UI", 8, "bold"),
+            text_color=COLOR_ACCENT,
+            anchor="e",
+        ).pack(side="right")
+
+        ctk.CTkLabel(
+            header,
+            text=description_map.get(
+                str(getattr(self, "_active_tab_name", "General")),
+                "Configuration workspace.",
+            ),
+            font=("Segoe UI", 9),
+            text_color=COLOR_TEXT_DIM,
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(0, 8))
+
+        ctk.CTkFrame(header, height=1, fg_color=COLOR_BORDER).pack(fill="x", padx=12, pady=(0, 9))
+
+    def _create_category_tabs(self, tab_names):
+        tabview = ctk.CTkTabview(
+            self.content_frame,
+            fg_color=COLOR_CARD_BG,
+            border_width=1,
+            border_color=COLOR_BORDER,
+            corner_radius=16,
+            segmented_button_fg_color=COLOR_SURFACE,
+            segmented_button_selected_color=COLOR_ACCENT,
+            segmented_button_selected_hover_color=COLOR_ACCENT_HOVER,
+            segmented_button_unselected_color=COLOR_INPUT_BG,
+            segmented_button_unselected_hover_color=COLOR_NAV_HOVER_BG,
+            text_color=COLOR_TEXT,
+            text_color_disabled=COLOR_TEXT_DIM,
+        )
+        tabview.pack(fill="both", expand=True, pady=(0, 12))
+        try:
+            tabview._segmented_button.configure(
+                font=("Segoe UI", 9, "bold"),
+                height=28,
+                corner_radius=11,
+                border_width=1,
+                border_color=COLOR_BORDER,
+            )
+        except Exception:
+            pass
+        tabs = {}
+        for tab_name in tab_names:
+            tab_frame = tabview.add(tab_name)
+            tab_frame.configure(fg_color="transparent")
+            tabs[tab_name] = tab_frame
+        return tabs
+
+    def _add_subtitle(self, text):
+        ctk.CTkLabel(
+            self.content_frame,
+            text=text.upper(),
+            font=("Segoe UI", 10, "bold"),
+            text_color=COLOR_TEXT_DIM,
+        ).pack(anchor="w", pady=(10, 5))
+
+    def _add_subtitle_in_frame(self, parent, text):
+        ctk.CTkLabel(
+            parent,
+            text=text.upper(),
+            font=("Segoe UI", 10, "bold"),
+            text_color=COLOR_TEXT_DIM,
+        ).pack(anchor="w", pady=(10, 5))
+    
+    def _add_spacer_in_frame(self, parent):
+        """é¦ã„¦å¯šç€¹?frame æ¶“î…ŸåŠé”çŠ»æž”ç’º?"""
+        ctk.CTkFrame(parent, height=1, fg_color="transparent").pack(fill="x", pady=6)
+    
+    def _create_tooltip(self, widget, text):
+        """
+        é?widget é“é›ç¼“ tooltip
+        
+        Args:
+            widget: ç‘•ä½ºç§®ç€¹?tooltip é¨?widget
+            text: tooltip é‚å›§ç“§éÑƒî†
+        """
+        tooltip_window = [None]  # æµ£è·¨æ•¤é’æ¥„ã€ƒæµ ãƒ¤ç©¶é¦ã„¥ç¥µæ¿‚æ¥€åš±éé•è…‘æ·‡î†½æ•¼
+        
+        def show_tooltip(event):
+            if tooltip_window[0] is not None:
+                return
+            
+            # é›æ’å½‡æ¦§çŠ³îž¿æµ£å¶‡ç–†
+            x = event.x_root + 10
+            y = event.y_root + 10
+            
+            # é“é›ç¼“ tooltip ç»æ¥€å½›
+            tooltip_win = ctk.CTkToplevel(widget)
+            tooltip_win.overrideredirect(True)
+            tooltip_win.attributes("-topmost", True)
+            tooltip_win.configure(fg_color=COLOR_BG)
+            
+            # é“é›ç¼“ tooltip éÑƒî†
+            tooltip_frame = ctk.CTkFrame(tooltip_win, fg_color=COLOR_SURFACE, corner_radius=4)
+            tooltip_frame.pack(fill="both", expand=True, padx=1, pady=1)
+            
+            tooltip_label = ctk.CTkLabel(
+                tooltip_frame,
+                text=text,
+                font=("Segoe UI", 11),
+                text_color=COLOR_TEXT,
+                justify="left",
+                anchor="w",
+                wraplength=400
+            )
+            tooltip_label.pack(anchor="w", padx=12, pady=10)
+            
+            # é‡å­˜æŸŠç»æ¥€å½›æ¾¶Ñƒçš¬æ¶“ï¹Åç¼ƒî†»ç¶…ç¼ƒ?
+            tooltip_win.update_idletasks()
+            tooltip_win.geometry(f"+{x}+{y}")
+            
+            tooltip_window[0] = tooltip_win
+        
+        def hide_tooltip(event):
+            if tooltip_window[0] is not None:
+                try:
+                    tooltip_window[0].destroy()
+                except:
+                    pass
+                tooltip_window[0] = None
+        
+        widget.bind("<Enter>", show_tooltip)
+        widget.bind("<Leave>", hide_tooltip)
+
+    def _get_collapsible_state_key(self, title, state_key=None):
+        tab_key = str(getattr(self, "_active_tab_name", "General")).strip().lower().replace(" ", "_")
+        section_key = str(state_key or title).strip().lower().replace(" ", "_")
+        return f"{tab_key}:{section_key}"
+
+    def _set_collapsible_state(self, cache_key, is_open):
+        self._collapsible_section_states[str(cache_key)] = bool(is_open)
+        config.ui_collapsible_states = dict(self._collapsible_section_states)
+
+    def _create_collapsible_section(self, parent, title, initially_open=True, auto_pack=True, tooltip_text=None, state_key=None):
+        """Create a collapsible card section and preserve open/close state."""
+        container = ctk.CTkFrame(parent, fg_color="transparent")
+        if auto_pack:
+            container.pack(fill="x", pady=(5, 0))
+
+        shell = ctk.CTkFrame(
+            container,
+            fg_color=COLOR_CARD_BG,
+            corner_radius=12,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        shell.pack(fill="x")
+
+        content = ctk.CTkFrame(shell, fg_color="transparent")
+
+        cache_key = self._get_collapsible_state_key(title, state_key=state_key)
+        initial_open_state = bool(self._collapsible_section_states.get(cache_key, initially_open))
+        is_open = [initial_open_state]
+        arrow_text = "v" if initial_open_state else ">"
+
+        header = ctk.CTkFrame(
+            shell,
+            fg_color=COLOR_CARD_HEADER,
+            corner_radius=10,
+            height=34,
+        )
+        header.pack(fill="x", padx=6, pady=(6, 0))
+        header.pack_propagate(False)
+
+        title_label = ctk.CTkLabel(
+            header,
+            text=title.upper(),
+            font=("Segoe UI", 10, "bold"),
+            text_color=COLOR_TEXT,
+        )
+        title_label.pack(side="left", padx=(10, 0))
+
+        if tooltip_text:
+            tooltip_icon = ctk.CTkLabel(
+                header,
+                text="?",
+                font=("Segoe UI", 10, "bold"),
+                text_color=COLOR_TEXT_DIM,
+                width=20,
+                cursor="hand2",
+            )
+            tooltip_icon.pack(side="left", padx=(8, 0))
+            self._create_tooltip(tooltip_icon, tooltip_text)
+
+        arrow_label = ctk.CTkLabel(
+            header,
+            text=arrow_text,
+            font=("Segoe UI", 11, "bold"),
+            text_color=COLOR_TEXT_DIM,
+            width=20,
+        )
+        arrow_label.pack(side="right", padx=(0, 10))
+
+        ctk.CTkFrame(shell, height=1, fg_color=COLOR_BORDER).pack(fill="x", padx=10, pady=(7, 0))
+
+        def toggle(_event=None):
+            if is_open[0]:
+                content.pack_forget()
+                arrow_label.configure(text=">")
+                is_open[0] = False
+                self._set_collapsible_state(cache_key, False)
+            else:
+                content.pack(fill="x", padx=12, pady=(8, 10))
+                arrow_label.configure(text="v")
+                is_open[0] = True
+                self._set_collapsible_state(cache_key, True)
+
+        header.bind("<Button-1>", toggle)
+        title_label.bind("<Button-1>", toggle)
+        arrow_label.bind("<Button-1>", toggle)
+
+        if initial_open_state:
+            content.pack(fill="x", padx=12, pady=(8, 10))
+        self._set_collapsible_state(cache_key, initial_open_state)
+
+        if auto_pack:
+            return content
+        return content, container
+
+    def _add_slider_in_frame(self, parent, text, key, min_val, max_val, init_val, command, is_float=False):
+        """Add a styled slider row inside a target parent frame."""
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.pack(fill="x", pady=4)
+
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.pack(fill="x")
+        ctk.CTkLabel(header, text=text, font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left", pady=(0, 1))
+
+        val_str = f"{init_val:.2f}" if is_float else f"{int(init_val)}"
+        val_entry = ctk.CTkEntry(
+            header,
+            width=78,
+            height=28,
+            fg_color=COLOR_INPUT_BG,
+            border_width=1,
+            border_color=COLOR_BORDER,
+            text_color=COLOR_TEXT,
+            font=FONT_MAIN,
+            justify="center",
+            corner_radius=8,
+        )
+        val_entry.insert(0, val_str)
+        val_entry.pack(side="right")
+
+        slider = ctk.CTkSlider(
+            frame,
+            from_=min_val,
+            to=max_val,
+            number_of_steps=100,
+            fg_color=COLOR_SWITCH_OFF,
+            progress_color=COLOR_SWITCH_ON,
+            button_color=COLOR_SWITCH_KNOB,
+            button_hover_color=COLOR_ACCENT_HOVER,
+            height=14,
+            command=lambda v: self._on_slider_changed(v, val_entry, key, command, is_float, slider, min_val, max_val),
+        )
+        slider.set(init_val)
+        slider.pack(fill="x", pady=(4, 2))
+
+        val_entry.bind("<Return>", lambda e: self._on_entry_changed(val_entry, slider, key, command, is_float, min_val, max_val))
+        val_entry.bind("<FocusOut>", lambda e: self._on_entry_changed(val_entry, slider, key, command, is_float, min_val, max_val))
+
+        self._register_slider(key, slider, val_entry, min_val, max_val, is_float)
+
+    def _add_option_row_in_frame(self, parent, label_text, values, command):
+        """Add a label + option menu row inside a target parent frame."""
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.pack(fill="x", pady=4)
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_columnconfigure(1, weight=0)
+        ctk.CTkLabel(frame, text=label_text, font=FONT_MAIN, text_color=COLOR_TEXT).grid(row=0, column=0, sticky="w", padx=(0, 10))
+        menu = self._add_option_menu(values, command, parent=frame)
+        menu.grid(row=0, column=1, sticky="e")
+        return menu
+
+    def _add_bind_capture_row_in_frame(self, parent, label_text, button_text, command):
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.pack(fill="x", pady=4)
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_columnconfigure(1, weight=0)
+        ctk.CTkLabel(frame, text=label_text, font=FONT_MAIN, text_color=COLOR_TEXT).grid(
+            row=0, column=0, sticky="w", padx=(0, 10)
+        )
+        button = ctk.CTkButton(
+            frame,
+            text=str(button_text),
+            command=command,
+            font=FONT_MAIN,
+            text_color=COLOR_TEXT,
+            fg_color=COLOR_INPUT_BG,
+            hover_color=COLOR_NAV_HOVER_BG,
+            border_width=1,
+            border_color=COLOR_BORDER,
+            corner_radius=10,
+            height=30,
+            width=162,
+        )
+        button.grid(row=0, column=1, sticky="e")
+        return button
+
+    def _add_switch_in_frame(self, parent, text, variable, command):
+        """Add a label + toggle switch row inside a target parent frame."""
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", pady=4)
+        ctk.CTkLabel(row, text=text, font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+
+        switch = ctk.CTkSwitch(
+            row,
+            text="",
+            variable=variable,
+            command=command,
+            progress_color=COLOR_SWITCH_ON,
+            fg_color=COLOR_SWITCH_OFF,
+            button_color=COLOR_SWITCH_KNOB,
+            button_hover_color=COLOR_ACCENT_HOVER,
+            width=44,
+            switch_width=44,
+            switch_height=22,
+        )
+        switch.pack(side="right")
+        return switch
+
+    def _add_spacer(self):
+        ctk.CTkFrame(self.content_frame, height=1, fg_color="transparent").pack(fill="x", pady=6)
+
+    def _add_switch(self, text, variable, command):
+        row = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        row.pack(fill="x", pady=4)
+        ctk.CTkLabel(row, text=text, font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+
+        switch = ctk.CTkSwitch(
+            row,
+            text="",
+            variable=variable,
+            command=command,
+            progress_color=COLOR_SWITCH_ON,
+            fg_color=COLOR_SWITCH_OFF,
+            button_color=COLOR_SWITCH_KNOB,
+            button_hover_color=COLOR_ACCENT_HOVER,
+            width=44,
+            switch_width=44,
+            switch_height=22,
+        )
+        switch.pack(side="right")
+        return switch
+
+    def _add_slider(self, text, key, min_val, max_val, init_val, command, is_float=False):
+        frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        frame.pack(fill="x", pady=4)
+
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.pack(fill="x")
+        ctk.CTkLabel(header, text=text, font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+
+        val_str = f"{init_val:.2f}" if is_float else f"{int(init_val)}"
+        val_entry = ctk.CTkEntry(
+            header,
+            width=78,
+            height=28,
+            fg_color=COLOR_INPUT_BG,
+            border_width=1,
+            border_color=COLOR_BORDER,
+            text_color=COLOR_TEXT,
+            font=FONT_MAIN,
+            justify="center",
+            corner_radius=8,
+        )
+        val_entry.insert(0, val_str)
+        val_entry.pack(side="right")
+
+        slider = ctk.CTkSlider(
+            frame,
+            from_=min_val,
+            to=max_val,
+            number_of_steps=100,
+            fg_color=COLOR_SWITCH_OFF,
+            progress_color=COLOR_SWITCH_ON,
+            button_color=COLOR_SWITCH_KNOB,
+            button_hover_color=COLOR_ACCENT_HOVER,
+            height=14,
+            command=lambda v: self._on_slider_changed(v, val_entry, key, command, is_float, slider, min_val, max_val),
+        )
+        slider.set(init_val)
+        slider.pack(fill="x", pady=(4, 2))
+
+        val_entry.bind("<Return>", lambda e: self._on_entry_changed(val_entry, slider, key, command, is_float, min_val, max_val))
+        val_entry.bind("<FocusOut>", lambda e: self._on_entry_changed(val_entry, slider, key, command, is_float, min_val, max_val))
+
+        self._register_slider(key, slider, val_entry, min_val, max_val, is_float)
+
+    def _add_range_slider_in_frame(self, parent, text, key, min_val, max_val, init_min, init_max, command, is_float=False):
+        self._add_range_slider_to_parent(
+            parent,
+            text,
+            key,
+            min_val,
+            max_val,
+            init_min,
+            init_max,
+            command,
+            is_float=is_float,
+        )
+
+    def _add_range_slider(self, text, key, min_val, max_val, init_min, init_max, command, is_float=False):
+        self._add_range_slider_to_parent(
+            self.content_frame,
+            text,
+            key,
+            min_val,
+            max_val,
+            init_min,
+            init_max,
+            command,
+            is_float=is_float,
+        )
+
+    def _add_range_slider_to_parent(
+        self,
+        parent,
+        text,
+        key,
+        min_val,
+        max_val,
+        init_min,
+        init_max,
+        command,
+        is_float=False,
+    ):
+        """Add a styled dual-range slider in the given parent frame."""
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.pack(fill="x", pady=4)
+
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.pack(fill="x")
+        ctk.CTkLabel(header, text=text, font=FONT_MAIN, text_color=COLOR_TEXT).pack(side="left")
+
+        max_str = f"{init_max:.2f}" if is_float else f"{int(init_max)}"
+        max_entry = ctk.CTkEntry(
+            header,
+            width=72,
+            height=28,
+            fg_color=COLOR_INPUT_BG,
+            border_width=1,
+            border_color=COLOR_BORDER,
+            text_color=COLOR_TEXT,
+            font=FONT_MAIN,
+            justify="center",
+            corner_radius=8,
+        )
+        max_entry.insert(0, max_str)
+        max_entry.pack(side="right", padx=2)
+
+        ctk.CTkLabel(header, text="~", font=FONT_MAIN, text_color=COLOR_TEXT_DIM).pack(side="right")
+
+        min_str = f"{init_min:.2f}" if is_float else f"{int(init_min)}"
+        min_entry = ctk.CTkEntry(
+            header,
+            width=72,
+            height=28,
+            fg_color=COLOR_INPUT_BG,
+            border_width=1,
+            border_color=COLOR_BORDER,
+            text_color=COLOR_TEXT,
+            font=FONT_MAIN,
+            justify="center",
+            corner_radius=8,
+        )
+        min_entry.insert(0, min_str)
+        min_entry.pack(side="right", padx=2)
+
+        slider_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        slider_frame.pack(fill="x", pady=(4, 2))
+
+        min_slider = ctk.CTkSlider(
+            slider_frame,
+            from_=min_val,
+            to=max_val,
+            number_of_steps=100 if is_float else int(max_val - min_val),
+            fg_color=COLOR_SWITCH_OFF,
+            progress_color=COLOR_SWITCH_ON,
+            button_color=COLOR_SWITCH_KNOB,
+            button_hover_color=COLOR_ACCENT_HOVER,
+            height=14,
+            command=lambda v: self._on_range_slider_changed(
+                v, "min", min_entry, max_entry, min_slider, max_slider, key, command, is_float, min_val, max_val
+            ),
+        )
+        min_slider.set(init_min)
+        min_slider.pack(fill="x", pady=2)
+
+        max_slider = ctk.CTkSlider(
+            slider_frame,
+            from_=min_val,
+            to=max_val,
+            number_of_steps=100 if is_float else int(max_val - min_val),
+            fg_color=COLOR_SWITCH_OFF,
+            progress_color=COLOR_SWITCH_ON,
+            button_color=COLOR_SWITCH_KNOB,
+            button_hover_color=COLOR_ACCENT_HOVER,
+            height=14,
+            command=lambda v: self._on_range_slider_changed(
+                v, "max", min_entry, max_entry, min_slider, max_slider, key, command, is_float, min_val, max_val
+            ),
+        )
+        max_slider.set(init_max)
+        max_slider.pack(fill="x", pady=2)
+
+        min_entry.bind(
+            "<Return>",
+            lambda e: self._on_range_entry_changed(
+                min_entry, max_entry, min_slider, max_slider, key, command, is_float, min_val, max_val
+            ),
+        )
+        min_entry.bind(
+            "<FocusOut>",
+            lambda e: self._on_range_entry_changed(
+                min_entry, max_entry, min_slider, max_slider, key, command, is_float, min_val, max_val
+            ),
+        )
+        max_entry.bind(
+            "<Return>",
+            lambda e: self._on_range_entry_changed(
+                min_entry, max_entry, min_slider, max_slider, key, command, is_float, min_val, max_val
+            ),
+        )
+        max_entry.bind(
+            "<FocusOut>",
+            lambda e: self._on_range_entry_changed(
+                min_entry, max_entry, min_slider, max_slider, key, command, is_float, min_val, max_val
+            ),
+        )
+
+        if not hasattr(self, "_range_slider_widgets"):
+            self._range_slider_widgets = {}
+        self._range_slider_widgets[key] = {
+            "min_slider": min_slider,
+            "max_slider": max_slider,
+            "min_entry": min_entry,
+            "max_entry": max_entry,
+            "min_val": min_val,
+            "max_val": max_val,
+            "is_float": is_float,
+        }
+
+    def _on_range_slider_changed(self, value, slider_type, min_entry, max_entry, min_slider, max_slider, key, command, is_float, range_min, range_max):
+        """é£å‰ç˜Žé¦å¶†ç²¦æ¿‰å©ƒæ•¼ç’å©ƒæªªé‡å­˜æŸŠ"""
+        val = float(value) if is_float else int(round(value))
+        
+        if slider_type == "min":
+            # çº°è½°ç¹š min æ¶“å¶…ã‡é‚?max
+            max_val = max_slider.get()
+            if is_float:
+                max_val = float(max_val)
+            else:
+                max_val = int(round(max_val))
+            
+            if val > max_val:
+                val = max_val
+                min_slider.set(val)
+            
+            # é‡å­˜æŸŠæ“ç¨¿å†å¦—?
+            min_entry.delete(0, "end")
+            min_entry.insert(0, f"{val:.2f}" if is_float else f"{val}")
+        else:  # max
+            # çº°è½°ç¹š max æ¶“å¶…çš¬é‚?min
+            min_val = min_slider.get()
+            if is_float:
+                min_val = float(min_val)
+            else:
+                min_val = int(round(min_val))
+            
+            if val < min_val:
+                val = min_val
+                max_slider.set(val)
+            
+            # é‡å­˜æŸŠæ“ç¨¿å†å¦—?
+            max_entry.delete(0, "end")
+            max_entry.insert(0, f"{val:.2f}" if is_float else f"{val}")
+        
+        # ç‘¾è·¨æ•¤é¥ç‚¶î€ž
+        min_v = min_slider.get()
+        max_v = max_slider.get()
+        if is_float:
+            command(float(min_v), float(max_v))
+        else:
+            command(int(round(min_v)), int(round(max_v)))
+    
+    def _on_range_entry_changed(self, min_entry, max_entry, min_slider, max_slider, key, command, is_float, range_min, range_max):
+        """é£å‰ç˜Žé¦å¶ˆå‡ éãƒ¦î”‹é€ç¡…ç•©é…å‚›æ´¿é‚ç‰ˆç²¦æ¿‰?"""
+        try:
+            min_val = float(min_entry.get()) if is_float else int(float(min_entry.get()))
+            max_val = float(max_entry.get()) if is_float else int(float(max_entry.get()))
+            
+            # é—„æ„¬åŸ—ç»¡å‹«æ¹‡
+            min_val = max(range_min, min(min_val, range_max))
+            max_val = max(range_min, min(max_val, range_max))
+            
+            # çº°è½°ç¹š min <= max
+            if min_val > max_val:
+                min_val, max_val = max_val, min_val
+            
+            # é‡å­˜æŸŠå©Šæˆî”
+            min_slider.set(min_val)
+            max_slider.set(max_val)
+            
+            # é‡å­˜æŸŠæ“ç¨¿å†å¦—å—›â€™ç»€?
+            min_entry.delete(0, "end")
+            min_entry.insert(0, f"{min_val:.2f}" if is_float else f"{min_val}")
+            max_entry.delete(0, "end")
+            max_entry.insert(0, f"{max_val:.2f}" if is_float else f"{max_val}")
+            
+            # ç‘¾è·¨æ•¤é¥ç‚¶î€ž
+            command(min_val, max_val)
+        except ValueError:
+            # é’â„ƒæ™¥æ“ç¨¿å†é”›å±¾ä»®å¯°â•åŸŒé£è·ºå¢ å©Šæˆî”éŠ?
+            min_val = min_slider.get()
+            max_val = max_slider.get()
+            if is_float:
+                min_val, max_val = float(min_val), float(max_val)
+            else:
+                min_val, max_val = int(round(min_val)), int(round(max_val))
+            
+            min_entry.delete(0, "end")
+            min_entry.insert(0, f"{min_val:.2f}" if is_float else f"{min_val}")
+            max_entry.delete(0, "end")
+            max_entry.insert(0, f"{max_val:.2f}" if is_float else f"{max_val}")
+
+    def _on_slider_changed(self, value, entry_widget, key, command, is_float, slider, min_val, max_val):
+        """é£èˆµç²¦å§Šæ¿‡æ•¼ç’å©ƒæªªé‡å­˜æŸŠæ“ç¨¿å†å¦—?"""
+        val = float(value) if is_float else int(round(value))
+        # é—„æ„¬åŸ—ç»¡å‹«æ¹‡
+        val = max(min_val, min(val, max_val))
+        
+        # é‡å­˜æŸŠæ“ç¨¿å†å¦—?
+        entry_widget.delete(0, "end")
+        entry_widget.insert(0, f"{val:.2f}" if is_float else f"{val}")
+        
+        # ç‘¾è·¨æ•¤é˜ç†·î command
+        command(val)
+
+    def _on_entry_changed(self, entry_widget, slider, key, command, is_float, min_val, max_val):
+        """é£æƒ°å‡ éãƒ¦î”‹é€ç¡…ç•©é…å‚›æ´¿é‚ç‰ˆç²¦å§Š?"""
+        try:
+            text = entry_widget.get()
+            val = float(text) if is_float else int(float(text))
+            
+            # é—„æ„¬åŸ—ç»¡å‹«æ¹‡
+            val = max(min_val, min(val, max_val))
+            
+            # é‡å­˜æŸŠå©Šæˆžî–‚
+            slider.set(val)
+            
+            # é‡å­˜æŸŠæ“ç¨¿å†å¦—å—›â€™ç»€çŒ´ç´™éç…Žç´¡é–æ µç´š
+            entry_widget.delete(0, "end")
+            entry_widget.insert(0, f"{val:.2f}" if is_float else f"{val}")
+            
+            # ç‘¾è·¨æ•¤é˜ç†·î command
+            command(val)
+        except ValueError:
+            # æ¿¡å‚›ç‰æ“ç¨¿å†é’â„ƒæ™¥é”›å±¾ä»®å¯°â•åŸŒå©Šæˆžî–‚é£è·ºå¢ éŠ?
+            current_val = slider.get()
+            val = float(current_val) if is_float else int(round(current_val))
+            entry_widget.delete(0, "end")
+            entry_widget.insert(0, f"{val:.2f}" if is_float else f"{val}")
+
+    def _add_option_menu(self, values, command, parent=None):
+        """Create a themed option menu."""
+        target_parent = parent if parent else self.content_frame
+        return ctk.CTkOptionMenu(
+            target_parent,
+            values=values,
+            command=command,
+            fg_color=COLOR_INPUT_BG,
+            button_color=COLOR_INPUT_BUTTON,
+            button_hover_color=COLOR_NAV_HOVER_BG,
+            text_color=COLOR_TEXT,
+            font=FONT_MAIN,
+            dropdown_fg_color=COLOR_SURFACE,
+            dropdown_hover_color=COLOR_NAV_HOVER_BG,
+            dropdown_text_color=COLOR_TEXT,
+            corner_radius=10,
+            height=30,
+            width=162,
+        )
+
+    def _add_option_row(self, label_text, values, command):
+        """Add a label + option menu row on the main content frame."""
+        frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        frame.pack(fill="x", pady=4)
+
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_columnconfigure(1, weight=0)
+
+        ctk.CTkLabel(frame, text=label_text, font=FONT_MAIN, text_color=COLOR_TEXT).grid(row=0, column=0, sticky="w", padx=(0, 10))
+
+        menu = self._add_option_menu(values, command, parent=frame)
+        menu.grid(row=0, column=1, sticky="e")
+        return menu
+
+    def _add_text_button(self, parent, text, command):
+        return ctk.CTkButton(
+            parent,
+            text=text,
+            font=("Segoe UI", 9, "bold"),
+            text_color=COLOR_TEXT,
+            fg_color=COLOR_INPUT_BG,
+            border_width=1,
+            border_color=COLOR_BORDER,
+            hover_color=COLOR_NAV_HOVER_BG,
+            height=30,
+            width=126,
+            corner_radius=10,
+            command=command,
+        )
+
+    # --- é–­å¿šé›†é”ç†»å…˜ ---
+
+    def start_move(self, event):
+        self._x = event.x
+        self._y = event.y
+
+    def do_move(self, event):
+        if self._is_maximized:
+            return
+        x = self.winfo_pointerx() - self._x
+        y = self.winfo_pointery() - self._y
+        self.geometry(f"+{x}+{y}")
+
+    def _on_window_map(self, _event=None):
+        if self.state() == "normal":
+            self.overrideredirect(True)
+            if not self._taskbar_style_applied:
+                self.after(0, self._ensure_taskbar_icon)
+
+    def _on_minimize(self):
+        self.overrideredirect(False)
+        self.iconify()
+
+    def _toggle_maximize(self):
+        # Fixed compact layout: keep window at 800x700.
+        self._is_maximized = False
+        self.geometry(f"{APP_FIXED_WIDTH}x{APP_FIXED_HEIGHT}")
+
+    def _ensure_taskbar_icon(self):
+        """åœ¨ä½¿ç”¨ overrideredirect æ™‚å¼·åˆ¶é¡¯ç¤ºå·¥ä½œåˆ—åœ–ç¤º / Force taskbar presence on Windows when using overrideredirect."""
+        if os.name != "nt" or self._taskbar_style_applied:
+            return
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = self.winfo_id()
+            GA_ROOT = 2
+            root_hwnd = user32.GetAncestor(hwnd, GA_ROOT)
+            if root_hwnd:
+                hwnd = root_hwnd
+
+            GWL_EXSTYLE = -20
+            WS_EX_TOOLWINDOW = 0x00000080
+            WS_EX_APPWINDOW = 0x00040000
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOZORDER = 0x0004
+            SWP_FRAMECHANGED = 0x0020
+
+            exstyle = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            exstyle = (exstyle & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, exstyle)
+            user32.SetWindowPos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED
+            )
+
+            # ä¸€æ¬¡æ€§ shell åˆ·æ–°ï¼ˆç›¡é‡é¿å…å¯è¦‹é–ƒçˆï¼‰/ One-time shell refresh without visible blink.
+            alpha_before = None
+            try:
+                alpha_before = float(self.attributes("-alpha"))
+            except Exception:
+                alpha_before = None
+            try:
+                if alpha_before is not None:
+                    self.attributes("-alpha", 0.0)
+                self.withdraw()
+                self.update_idletasks()
+                self.deiconify()
+            finally:
+                if alpha_before is not None:
+                    self.after(20, lambda: self.attributes("-alpha", alpha_before))
+
+            self._taskbar_style_applied = True
+        except Exception as e:
+            log_print(f"[UI] Failed to force taskbar icon: {e}")
+
+    def _register_slider(self, key, slider, entry, vmin, vmax, is_float):
+        self._slider_widgets[key] = {"slider": slider, "entry": entry, "min": vmin, "max": vmax, "is_float": is_float}
+
+    def _set_slider_value(self, key, value):
+        if key not in self._slider_widgets: return
+        w = self._slider_widgets[key]
+        is_float = w["is_float"]
+        try:
+            v = float(value) if is_float else int(round(float(value)))
+        except: return
+        v = max(w["min"], min(v, w["max"]))
+        w["slider"].set(v)
+        # é‡å­˜æŸŠæ“ç¨¿å†å¦—å—šâ‚¬å±¼ç¬‰é„îˆ›îž¿ç»«?
+        w["entry"].delete(0, "end")
+        w["entry"].insert(0, f"{v:.2f}" if is_float else f"{v}")
+
+    def _set_checkbox_value(self, key, value_bool):
+        var = self._checkbox_vars.get(key)
+        if var: var.set(bool(value_bool))
+
+    def _set_option_value(self, key, value_str):
+        menu = self._option_widgets.get(key)
+        if not menu or value_str is None:
+            return
+        try:
+            if hasattr(menu, "winfo_exists") and not bool(menu.winfo_exists()):
+                self._option_widgets.pop(key, None)
+                return
+            menu.set(str(value_str))
+        except Exception:
+            # Widget was likely destroyed while switching tabs.
+            self._option_widgets.pop(key, None)
+
+    def _set_btn_option_value(self, key, value_str):
+        self._set_option_value(key, value_str)
+
+    def _add_ads_fov_controls_in_frame(self, parent, is_sec=False):
+        if is_sec:
+            enabled_key = "ads_fov_enabled_sec"
+            slider_key = "ads_fovsize_sec"
+            fallback_fov = getattr(config, "fovsize_sec", 150)
+            callback_enabled = self._on_ads_fov_enabled_sec_changed
+            callback_slider = self._on_ads_fovsize_sec_changed
+        else:
+            enabled_key = "ads_fov_enabled"
+            slider_key = "ads_fovsize"
+            fallback_fov = getattr(config, "fovsize", 300)
+            callback_enabled = self._on_ads_fov_enabled_changed
+            callback_slider = self._on_ads_fovsize_changed
+
+        var = tk.BooleanVar(value=bool(getattr(config, enabled_key, False)))
+        if is_sec:
+            self.var_ads_fov_enabled_sec = var
+        else:
+            self.var_ads_fov_enabled = var
+
+        self._add_switch_in_frame(parent, "Enable ADS FOV", var, callback_enabled)
+        self._checkbox_vars[enabled_key] = var
+
+        if var.get():
+            self._add_slider_in_frame(
+                parent,
+                "ADS FOV Size",
+                slider_key,
+                1,
+                1000,
+                float(getattr(config, slider_key, fallback_fov)),
+                callback_slider,
+            )
+
+    def _add_trigger_ads_fov_controls_in_frame(self, parent):
+        enabled_key = "trigger_ads_fov_enabled"
+        slider_key = "trigger_ads_fovsize"
+        fallback_fov = getattr(config, "tbfovsize", 70)
+
+        self.var_trigger_ads_fov_enabled = tk.BooleanVar(
+            value=bool(getattr(config, enabled_key, False))
+        )
+        self._add_switch_in_frame(
+            parent,
+            "Enable Trigger ADS FOV",
+            self.var_trigger_ads_fov_enabled,
+            self._on_trigger_ads_fov_enabled_changed,
+        )
+        self._checkbox_vars[enabled_key] = self.var_trigger_ads_fov_enabled
+
+        if self.var_trigger_ads_fov_enabled.get():
+            self._add_slider_in_frame(
+                parent,
+                "Trigger ADS FOV Size",
+                slider_key,
+                1,
+                300,
+                float(getattr(config, slider_key, fallback_fov)),
+                self._on_trigger_ads_fovsize_changed,
+            )
+
+    def _ads_binding_to_display(self, binding_value):
+        if binding_value is None:
+            return "Right Mouse Button"
+        try:
+            idx = int(binding_value)
+            if idx in BUTTONS:
+                return BUTTONS[idx]
+        except Exception:
+            pass
+        raw = str(binding_value).strip()
+        if not raw:
+            return "Right Mouse Button"
+        if raw in BUTTON_NAME_TO_IDX:
+            return raw
+        if raw.isdigit():
+            idx = int(raw)
+            if idx in BUTTONS:
+                return BUTTONS[idx]
+        if raw in ADS_KEY_DISPLAY_TO_BINDING:
+            return raw
+        token = raw.upper()
+        pretty_map = {
+            "SPACE": "Space",
+            "TAB": "Tab",
+            "ENTER": "Enter",
+            "ESCAPE": "Esc",
+            "LSHIFT": "Left Shift",
+            "RSHIFT": "Right Shift",
+            "LCONTROL": "Left Ctrl",
+            "RCONTROL": "Right Ctrl",
+            "LMENU": "Left Alt",
+            "RMENU": "Right Alt",
+            "UP": "Up Arrow",
+            "DOWN": "Down Arrow",
+            "LEFT": "Left Arrow",
+            "RIGHT": "Right Arrow",
+        }
+        if token in ADS_KEY_BINDING_TO_DISPLAY:
+            return ADS_KEY_BINDING_TO_DISPLAY[token]
+        if token in pretty_map:
+            return pretty_map[token]
+        if len(token) == 1 and token.isalnum():
+            return token
+        if token.startswith("F") and token[1:].isdigit():
+            return token
+        return raw
+
+    def _ads_display_to_binding(self, display_value):
+        return ADS_KEY_DISPLAY_TO_BINDING.get(str(display_value), "Right Mouse Button")
+
+    def _set_bind_button_text(self, button, text):
+        try:
+            if button is not None and hasattr(button, "winfo_exists") and bool(button.winfo_exists()):
+                button.configure(text=str(text))
+        except Exception:
+            pass
+
+    def _cancel_binding_capture(self):
+        ctx = getattr(self, "_binding_capture_ctx", None)
+        if not isinstance(ctx, dict):
+            self._binding_capture_ctx = None
+            return
+        button = ctx.get("button")
+        self._set_bind_button_text(button, ctx.get("restore_text", "Set"))
+        self._binding_capture_ctx = None
+
+    def _is_binding_pressed_by_backend(self, binding):
+        try:
+            from src.utils import mouse as mouse_backend
+        except Exception:
+            return False
+
+        mouse_idx = BUTTON_NAME_TO_IDX.get(str(binding), None)
+        try:
+            if mouse_idx is not None:
+                return bool(mouse_backend.is_button_pressed(int(mouse_idx)))
+            return bool(mouse_backend.is_key_pressed(binding))
+        except Exception:
+            return False
+
+    def _is_input_backend_connected(self):
+        try:
+            from src.utils import mouse as mouse_backend
+
+            return bool(getattr(mouse_backend, "is_connected", False))
+        except Exception:
+            return False
+
+    def _get_binding_capture_candidates(self):
+        mode = getattr(config, "mouse_api", "Serial")
+        keyboard_supported = self._supports_keyboard_state(mode)
+
+        # Keep deterministic order: mouse first, then keyboard.
+        candidates = list(BUTTONS.values())
+        if keyboard_supported:
+            for _, binding in ADS_KEY_DISPLAY_TO_BINDING.items():
+                if binding not in candidates:
+                    candidates.append(binding)
+            for binding in BIND_CAPTURE_KEY_TOKENS:
+                if binding not in candidates:
+                    candidates.append(binding)
+        return candidates, keyboard_supported
+
+    def _normalize_aim_binding_for_config(self, binding):
+        if binding is None:
+            return 3
+        idx = BUTTON_NAME_TO_IDX.get(str(binding), None)
+        if idx is not None:
+            return int(idx)
+        try:
+            parsed = int(binding)
+            if parsed in BUTTONS:
+                return int(parsed)
+        except Exception:
+            pass
+        return str(binding)
+
+    def _start_aim_key_capture(self, is_sec=False):
+        config_key = "selected_mouse_button_sec" if is_sec else "selected_mouse_button"
+        tracker_key = "selected_mouse_button_sec" if is_sec else "selected_mouse_button"
+        button = getattr(self, "aim_key_bind_button_sec" if is_sec else "aim_key_bind_button", None)
+        if button is None:
+            return
+
+        self._cancel_binding_capture()
+
+        candidates, keyboard_supported = self._get_binding_capture_candidates()
+        if not keyboard_supported:
+            self._log_config("Current Input API does not expose keyboard state; capture supports mouse buttons only.")
+        if not self._is_input_backend_connected():
+            self._log_config("Input API is not connected; key capture may timeout.")
+
+        prev_states = {binding: bool(self._is_binding_pressed_by_backend(binding)) for binding in candidates}
+        restore_binding = getattr(config, config_key, 2 if is_sec else 3)
+        restore_text = self._ads_binding_to_display(restore_binding)
+
+        ctx = {
+            "id": int(getattr(self, "_binding_capture_id", 0)) + 1,
+            "config_key": config_key,
+            "tracker_key": tracker_key,
+            "binding_kind": "aim",
+            "log_label": "Sec Aim Key" if is_sec else "Aim Key",
+            "button": button,
+            "restore_text": restore_text,
+            "candidates": candidates,
+            "prev_states": prev_states,
+            "started_at": time.monotonic(),
+            "arm_at": time.monotonic() + 0.35,
+            "timeout_sec": 10.0,
+        }
+        self._binding_capture_id = ctx["id"]
+        self._binding_capture_ctx = ctx
+        self._set_bind_button_text(button, "Press key...")
+        self.after(30, lambda capture_id=ctx["id"]: self._poll_binding_capture(capture_id))
+
+    def _start_trigger_key_capture(self):
+        config_key = "selected_tb_btn"
+        tracker_key = "selected_tb_btn"
+        button = getattr(self, "tb_key_bind_button", None)
+        if button is None:
+            return
+
+        self._cancel_binding_capture()
+
+        candidates, keyboard_supported = self._get_binding_capture_candidates()
+        if not keyboard_supported:
+            self._log_config("Current Input API does not expose keyboard state; capture supports mouse buttons only.")
+        if not self._is_input_backend_connected():
+            self._log_config("Input API is not connected; key capture may timeout.")
+
+        prev_states = {binding: bool(self._is_binding_pressed_by_backend(binding)) for binding in candidates}
+        restore_binding = getattr(config, config_key, 3)
+        restore_text = self._ads_binding_to_display(restore_binding)
+
+        ctx = {
+            "id": int(getattr(self, "_binding_capture_id", 0)) + 1,
+            "config_key": config_key,
+            "tracker_key": tracker_key,
+            "binding_kind": "trigger",
+            "log_label": "Trigger Key",
+            "button": button,
+            "restore_text": restore_text,
+            "candidates": candidates,
+            "prev_states": prev_states,
+            "started_at": time.monotonic(),
+            "arm_at": time.monotonic() + 0.35,
+            "timeout_sec": 10.0,
+        }
+        self._binding_capture_id = ctx["id"]
+        self._binding_capture_ctx = ctx
+        self._set_bind_button_text(button, "Press key...")
+        self.after(30, lambda capture_id=ctx["id"]: self._poll_binding_capture(capture_id))
+
+    def _start_ads_key_capture(self, is_sec=False):
+        key_name = "ads_key_sec" if is_sec else "ads_key"
+        tracker_attr = "ads_key_sec" if is_sec else "ads_key"
+        button = getattr(self, "ads_key_bind_button_sec" if is_sec else "ads_key_bind_button", None)
+        if button is None:
+            return
+
+        self._cancel_binding_capture()
+
+        candidates, keyboard_supported = self._get_binding_capture_candidates()
+        if not keyboard_supported:
+            self._log_config("Current Input API does not expose keyboard state; capture supports mouse buttons only.")
+        if not self._is_input_backend_connected():
+            self._log_config("Input API is not connected; key capture may timeout.")
+
+        prev_states = {binding: bool(self._is_binding_pressed_by_backend(binding)) for binding in candidates}
+        restore_binding = getattr(config, key_name, "Right Mouse Button")
+        restore_text = self._ads_binding_to_display(restore_binding)
+
+        ctx = {
+            "id": int(getattr(self, "_binding_capture_id", 0)) + 1,
+            "config_key": key_name,
+            "tracker_key": tracker_attr,
+            "binding_kind": "ads",
+            "log_label": "Sec ADS Key" if is_sec else "ADS Key",
+            "button": button,
+            "restore_text": restore_text,
+            "candidates": candidates,
+            "prev_states": prev_states,
+            "started_at": time.monotonic(),
+            "arm_at": time.monotonic() + 0.35,
+            "timeout_sec": 10.0,
+        }
+        self._binding_capture_id = ctx["id"]
+        self._binding_capture_ctx = ctx
+        self._set_bind_button_text(button, "Press key...")
+        self.after(30, lambda capture_id=ctx["id"]: self._poll_binding_capture(capture_id))
+
+    def _start_trigger_ads_key_capture(self):
+        config_key = "trigger_ads_key"
+        tracker_key = "trigger_ads_key"
+        button = getattr(self, "trigger_ads_key_bind_button", None)
+        if button is None:
+            return
+
+        self._cancel_binding_capture()
+
+        candidates, keyboard_supported = self._get_binding_capture_candidates()
+        if not keyboard_supported:
+            self._log_config("Current Input API does not expose keyboard state; capture supports mouse buttons only.")
+        if not self._is_input_backend_connected():
+            self._log_config("Input API is not connected; key capture may timeout.")
+
+        prev_states = {binding: bool(self._is_binding_pressed_by_backend(binding)) for binding in candidates}
+        restore_binding = getattr(config, config_key, "Right Mouse Button")
+        restore_text = self._ads_binding_to_display(restore_binding)
+
+        ctx = {
+            "id": int(getattr(self, "_binding_capture_id", 0)) + 1,
+            "config_key": config_key,
+            "tracker_key": tracker_key,
+            "binding_kind": "trigger_ads",
+            "log_label": "Trigger ADS Key",
+            "button": button,
+            "restore_text": restore_text,
+            "candidates": candidates,
+            "prev_states": prev_states,
+            "started_at": time.monotonic(),
+            "arm_at": time.monotonic() + 0.35,
+            "timeout_sec": 10.0,
+        }
+        self._binding_capture_id = ctx["id"]
+        self._binding_capture_ctx = ctx
+        self._set_bind_button_text(button, "Press key...")
+        self.after(30, lambda capture_id=ctx["id"]: self._poll_binding_capture(capture_id))
+
+    def _poll_binding_capture(self, capture_id):
+        ctx = getattr(self, "_binding_capture_ctx", None)
+        if not isinstance(ctx, dict):
+            return
+        if int(ctx.get("id", -1)) != int(capture_id):
+            return
+
+        now = time.monotonic()
+        if now - float(ctx.get("started_at", now)) > float(ctx.get("timeout_sec", 10.0)):
+            self._set_bind_button_text(ctx.get("button"), ctx.get("restore_text", "Set"))
+            self._binding_capture_ctx = None
+            label = str(ctx.get("log_label", "Key")).strip()
+            self._log_config(f"{label} capture timed out.")
+            return
+
+        candidates = list(ctx.get("candidates", []))
+        prev_states = dict(ctx.get("prev_states", {}))
+        selected_binding = None
+        for binding in candidates:
+            current_pressed = bool(self._is_binding_pressed_by_backend(binding))
+            prev_pressed = bool(prev_states.get(binding, False))
+            if now >= float(ctx.get("arm_at", now)) and current_pressed and not prev_pressed:
+                selected_binding = binding
+                prev_states[binding] = current_pressed
+                break
+            prev_states[binding] = current_pressed
+        ctx["prev_states"] = prev_states
+
+        if selected_binding is not None:
+            config_key = str(ctx.get("config_key", "ads_key"))
+            tracker_key = str(ctx.get("tracker_key", "ads_key"))
+            binding_kind = str(ctx.get("binding_kind", "ads")).strip().lower()
+            if binding_kind in {"aim", "trigger"}:
+                stored_value = self._normalize_aim_binding_for_config(selected_binding)
+            else:
+                stored_value = selected_binding
+
+            setattr(config, config_key, stored_value)
+            if hasattr(self, "tracker"):
+                setattr(self.tracker, tracker_key, stored_value)
+
+            display_name = self._ads_binding_to_display(stored_value)
+            self._set_bind_button_text(ctx.get("button"), display_name)
+            label = str(ctx.get("log_label", "Key")).strip()
+            self._log_config(f"{label}: {display_name}")
+            self._binding_capture_ctx = None
+            return
+
+        self._binding_capture_ctx = ctx
+        self.after(30, lambda: self._poll_binding_capture(capture_id))
+
+    def _get_current_settings(self):
+        """é›æ’å½‡é£è·ºå¢ éŽµâ‚¬éˆå¤ŽÅç¼ƒ?- é©å­˜å¸´æµ£è·¨æ•¤ config.to_dict() çº°è½°ç¹šæ¶“â‚¬é‘·å­˜â‚¬?"""
+        return config.to_dict()
+
+    def _load_initial_config(self):
+        """é’æ¿†îé–æ ¨æªªæ“å¤Šå†é–°å¶‡ç–†æ¶“ï¸½å™³é¢ã„¥åŸŒéŽµâ‚¬éˆ?UI éå†ªç¤Œ"""
+        try:
+            # é–°å¶‡ç–†å®¸èŒ¬ç¨‰é¦?config.py é¨?__init__ æ¶“î…¡åšœé•æ›¡ç´šéãƒ¤ç°¡
+            # éæƒ§æ¹ªé—‡â‚¬ç‘•ä½¸çš£é–°å¶‡ç–†éšå±¾î„žé’?tracker éœ?UI
+            self._sync_config_to_tracker()
+            
+            # é–²å¶†æŸŠæ¤¤îˆœãšé£è·ºå¢ é—‹ä¾€æ½°æµ ãƒ¦æ´¿é‚?UI éå†ªç¤Œ
+            # é–«æ¬æ¸»çº°è½°ç¹šéŽµâ‚¬éˆ?slideréŠ†ä¹§heckboxéŠ†ä¹·ption menu é–®ä»‹â€™ç»€çƒ˜î„œçº°è™¹æ®‘éŠ?
+            self._handle_nav_click("General", self._show_general_tab)
+            
+            log_print("[UI] Configuration loaded")
+        except Exception as e:
+            log_print(f"[UI] Init load error: {e}")
+    
+    def _sync_config_to_tracker(self):
+        """ç?config æ¶“î… æ®‘éŠç…Žæ‚“å§ãƒ¥åŸŒ tracker"""
+        try:
+            # éšå±¾î„žéŽµâ‚¬éˆå¤Šå¼®é?
+            self.tracker.normal_x_speed = config.normal_x_speed
+            self.tracker.normal_y_speed = config.normal_y_speed
+            self.tracker.normalsmooth = config.normalsmooth
+            self.tracker.normalsmoothfov = config.normalsmoothfov
+            self.tracker.mouse_dpi = config.mouse_dpi
+            self.tracker.fovsize = config.fovsize
+            self.tracker.ads_fov_enabled = getattr(config, "ads_fov_enabled", False)
+            self.tracker.ads_fovsize = getattr(config, "ads_fovsize", config.fovsize)
+            self.tracker.ads_key = getattr(config, "ads_key", "Right Mouse Button")
+            self.tracker.tbfovsize = config.tbfovsize
+            self.tracker.trigger_ads_fov_enabled = getattr(config, "trigger_ads_fov_enabled", False)
+            self.tracker.trigger_ads_fovsize = getattr(config, "trigger_ads_fovsize", config.tbfovsize)
+            self.tracker.trigger_ads_key = getattr(config, "trigger_ads_key", "Right Mouse Button")
+            self.tracker.trigger_ads_key_type = getattr(config, "trigger_ads_key_type", "hold")
+            self.tracker.selected_tb_btn = config.selected_tb_btn
+            self.tracker.trigger_type = getattr(config, "trigger_type", "current")
+            self.tracker.tbdelay_min = config.tbdelay_min
+            self.tracker.tbdelay_max = config.tbdelay_max
+            self.tracker.tbhold_min = config.tbhold_min
+            self.tracker.tbhold_max = config.tbhold_max
+            self.tracker.tbcooldown_min = config.tbcooldown_min
+            self.tracker.tbcooldown_max = config.tbcooldown_max
+            self.tracker.rgb_tbdelay_min = getattr(config, "rgb_tbdelay_min", 0.08)
+            self.tracker.rgb_tbdelay_max = getattr(config, "rgb_tbdelay_max", 0.15)
+            self.tracker.rgb_tbhold_min = getattr(config, "rgb_tbhold_min", 40)
+            self.tracker.rgb_tbhold_max = getattr(config, "rgb_tbhold_max", 60)
+            self.tracker.rgb_tbcooldown_min = getattr(config, "rgb_tbcooldown_min", 0.0)
+            self.tracker.rgb_tbcooldown_max = getattr(config, "rgb_tbcooldown_max", 0.0)
+            self.tracker.rgb_color_profile = getattr(config, "rgb_color_profile", "purple")
+            self.tracker.tbburst_count_min = config.tbburst_count_min
+            self.tracker.tbburst_count_max = config.tbburst_count_max
+            self.tracker.tbburst_interval_min = config.tbburst_interval_min
+            self.tracker.tbburst_interval_max = config.tbburst_interval_max
+            self.tracker.trigger_roi_size = getattr(config, "trigger_roi_size", 8)
+            self.tracker.trigger_min_pixels = getattr(config, "trigger_min_pixels", 4)
+            self.tracker.trigger_min_ratio = getattr(config, "trigger_min_ratio", 0.03)
+            self.tracker.trigger_confirm_frames = getattr(config, "trigger_confirm_frames", 2)
+            self.tracker.switch_confirm_frames = getattr(config, "switch_confirm_frames", 3)
+            self.tracker.ema_alpha = getattr(config, "ema_alpha", 0.35)
+            if hasattr(self.tracker, "_target_smoother"):
+                self.tracker._target_smoother.switch_confirm_frames = int(self.tracker.switch_confirm_frames)
+                self.tracker._target_smoother.ema_alpha = float(self.tracker.ema_alpha)
+            self.tracker.rcs_pull_speed = config.rcs_pull_speed
+            self.tracker.rcs_activation_delay = config.rcs_activation_delay
+            self.tracker.rcs_rapid_click_threshold = config.rcs_rapid_click_threshold
+            # Silent Mode
+            self.tracker.silent_distance = getattr(config, "silent_distance", 1.0)
+            self.tracker.silent_delay = getattr(config, "silent_delay", 100.0)
+            self.tracker.silent_move_delay = getattr(config, "silent_move_delay", 500.0)
+            self.tracker.silent_return_delay = getattr(config, "silent_return_delay", 500.0)
+            self.tracker.in_game_sens = config.in_game_sens
+            self.tracker.color = config.color
+            self.tracker.mode = config.mode
+            self.tracker.mode_sec = getattr(config, "mode_sec", "Normal")
+            self.tracker.selected_mouse_button = config.selected_mouse_button
+            self.tracker.selected_mouse_button_sec = config.selected_mouse_button_sec
+            
+            # Update target FPS
+            target_fps = getattr(config, "target_fps", 80)
+            if hasattr(self.tracker, 'set_target_fps'):
+                self.tracker.set_target_fps(target_fps)
+            else:
+                self.tracker._target_fps = float(target_fps)
+            
+            # Sec Aimbot
+            self.tracker.normal_x_speed_sec = config.normal_x_speed_sec
+            self.tracker.normal_y_speed_sec = config.normal_y_speed_sec
+            self.tracker.normalsmooth_sec = config.normalsmooth_sec
+            self.tracker.normalsmoothfov_sec = config.normalsmoothfov_sec
+            self.tracker.fovsize_sec = config.fovsize_sec
+            self.tracker.ads_fov_enabled_sec = getattr(config, "ads_fov_enabled_sec", False)
+            self.tracker.ads_fovsize_sec = getattr(config, "ads_fovsize_sec", config.fovsize_sec)
+            self.tracker.ads_key_sec = getattr(config, "ads_key_sec", "Right Mouse Button")
+            self.tracker.selected_mouse_button_sec = config.selected_mouse_button_sec
+            
+        except Exception as e:
+            log_print(f"[UI] Sync error: {e}")
+
+    def _apply_settings(self, data, config_name=None):
+        try:
+            data = self._strip_config_metadata(data)
+            for k, v in data.items():
+                setattr(config, k, v)
+                if hasattr(self.tracker, k):
+                    setattr(self.tracker, k, v)
+                
+                if k in self._slider_widgets: 
+                    self._set_slider_value(k, v)
+                if k in self._checkbox_vars: 
+                    self._set_checkbox_value(k, v)
+                if k in self._option_widgets: 
+                    if k in ["selected_mouse_button", "selected_mouse_button_sec"]:
+                        self._set_btn_option_value(k, BUTTONS.get(v, str(v)))
+                    elif k in ("ads_key", "ads_key_sec"):
+                        self._set_option_value(k, self._ads_binding_to_display(v))
+                    elif k in ("ads_key_type", "ads_key_type_sec"):
+                        self._set_option_value(
+                            k,
+                            ADS_KEY_TYPE_VALUE_TO_DISPLAY.get(str(v).strip().lower(), "Hold"),
+                        )
+                    elif k == "trigger_ads_key_type":
+                        self._set_option_value(
+                            k,
+                            ADS_KEY_TYPE_VALUE_TO_DISPLAY.get(str(v).strip().lower(), "Hold"),
+                        )
+                    elif k == "trigger_type":
+                        trigger_type_display = {
+                            "current": "Classic Trigger",
+                            "rgb": "RGB Trigger",
+                        }
+                        self._set_option_value(k, trigger_type_display.get(str(v).lower(), "Classic Trigger"))
+                    elif k == "rgb_color_profile":
+                        rgb_profile_display = {
+                            "red": "Red",
+                            "yellow": "Yellow",
+                            "purple": "Purple",
+                            "same_as_hsv": "Same as HSV",
+                            "custom": "Custom",
+                        }
+                        self._set_option_value(k, rgb_profile_display.get(str(v).lower(), "Purple"))
+                    elif k == "trigger_activation_type":
+                        trigger_activation_display = {
+                            "hold_enable": "Hold to Enable",
+                            "hold_disable": "Hold to Disable",
+                            "toggle": "Toggle",
+                        }
+                        self._set_option_value(k, trigger_activation_display.get(str(v), "Hold to Enable"))
+                    elif k == "trigger_strafe_mode":
+                        strafe_mode_display = {
+                            "off": "Off",
+                            "auto": "Auto Strafe",
+                            "manual_wait": "Manual Wait",
+                        }
+                        self._set_option_value(k, strafe_mode_display.get(str(v), "Off"))
+                    else:
+                        self._set_option_value(k, v)
+
+                if k == "selected_mouse_button" and hasattr(self, "aim_key_bind_button"):
+                    self._set_bind_button_text(self.aim_key_bind_button, self._ads_binding_to_display(v))
+                elif k == "selected_mouse_button_sec" and hasattr(self, "aim_key_bind_button_sec"):
+                    self._set_bind_button_text(self.aim_key_bind_button_sec, self._ads_binding_to_display(v))
+                elif k == "selected_tb_btn" and hasattr(self, "tb_key_bind_button"):
+                    self._set_bind_button_text(self.tb_key_bind_button, self._ads_binding_to_display(v))
+                elif k == "ads_key" and hasattr(self, "ads_key_bind_button"):
+                    self._set_bind_button_text(self.ads_key_bind_button, self._ads_binding_to_display(v))
+                elif k == "ads_key_sec" and hasattr(self, "ads_key_bind_button_sec"):
+                    self._set_bind_button_text(self.ads_key_bind_button_sec, self._ads_binding_to_display(v))
+                elif k == "trigger_ads_key" and hasattr(self, "trigger_ads_key_bind_button"):
+                    self._set_bind_button_text(self.trigger_ads_key_bind_button, self._ads_binding_to_display(v))
+
+                if k == "serial_auto_switch_4m":
+                    self.saved_serial_auto_switch_4m = bool(v)
+                    if hasattr(self, "var_serial_auto_switch_4m"):
+                        self.var_serial_auto_switch_4m.set(bool(v))
+                
+                # é‡å­˜æŸŠ OpenCV æ¤¤îˆœãšç‘·î… ç–†é¨?UI ç’å©‡å™º
+                if k == "show_opencv_windows" and hasattr(self, "show_opencv_var"):
+                    self.show_opencv_var.set(v)
+                elif k == "show_mode_text" and hasattr(self, "show_mode_var"):
+                    self.show_mode_var.set(v)
+                elif k == "show_aimbot_status" and hasattr(self, "show_aimbot_status_var"):
+                    self.show_aimbot_status_var.set(v)
+                elif k == "show_triggerbot_status" and hasattr(self, "show_triggerbot_status_var"):
+                    self.show_triggerbot_status_var.set(v)
+                elif k == "show_target_count" and hasattr(self, "show_target_count_var"):
+                    self.show_target_count_var.set(v)
+                elif k == "show_crosshair" and hasattr(self, "show_crosshair_var"):
+                    self.show_crosshair_var.set(v)
+                elif k == "show_distance_text" and hasattr(self, "show_distance_var"):
+                    self.show_distance_var.set(v)
+                # é‡å­˜æŸŠ NDI FOV ç‘·î… ç–†
+                elif k == "ndi_fov_enabled" and hasattr(self, "var_ndi_fov_enabled"):
+                    self.var_ndi_fov_enabled.set(v)
+                elif k == "ndi_fov" and hasattr(self, "ndi_fov_entry") and self.ndi_fov_entry.winfo_exists():
+                    self.ndi_fov_entry.delete(0, "end")
+                    self.ndi_fov_entry.insert(0, str(v))
+                    if hasattr(self, "ndi_fov_slider"):
+                        self.ndi_fov_slider.set(v)
+                    self._update_ndi_fov_info()
+                # é‡å­˜æŸŠ UDP FOV ç‘·î… ç–†
+                elif k == "udp_fov_enabled" and hasattr(self, "var_udp_fov_enabled"):
+                    self.var_udp_fov_enabled.set(v)
+                elif k == "udp_fov" and hasattr(self, "udp_fov_entry") and self.udp_fov_entry.winfo_exists():
+                    self.udp_fov_entry.delete(0, "end")
+                    self.udp_fov_entry.insert(0, str(v))
+                    if hasattr(self, "udp_fov_slider"):
+                        self.udp_fov_slider.set(v)
+                    self._update_udp_fov_info()
+
+            if str(getattr(self, "_active_tab_name", "")) == "Trigger":
+                if (
+                    "trigger_type" in data
+                    or "trigger_strafe_mode" in data
+                    or "mouse_api" in data
+                    or "selected_tb_btn" in data
+                    or "trigger_ads_fov_enabled" in data
+                    or "trigger_ads_key" in data
+                    or "trigger_ads_key_type" in data
+                ):
+                    if not self._supports_trigger_strafe_ui(getattr(config, "mouse_api", "Serial")):
+                        config.trigger_strafe_mode = "off"
+                    self._show_tb_tab()
+            if str(getattr(self, "_active_tab_name", "")) == "Main Aimbot":
+                if (
+                    "mode" in data
+                    or "mouse_api" in data
+                    or "selected_mouse_button" in data
+                    or "ads_fov_enabled" in data
+                    or "ads_key" in data
+                    or "ads_key_type" in data
+                ):
+                    self._show_aimbot_tab()
+            if str(getattr(self, "_active_tab_name", "")) == "Sec Aimbot":
+                if (
+                    "mode_sec" in data
+                    or "mouse_api" in data
+                    or "selected_mouse_button_sec" in data
+                    or "ads_fov_enabled_sec" in data
+                    or "ads_key_sec" in data
+                    or "ads_key_type_sec" in data
+                ):
+                    self._show_sec_aimbot_tab()
+
+            from src.utils.detection import reload_model
+            self.tracker.model, self.tracker.class_names = reload_model()
+            
+            msg = f"Loaded: {config_name}" if config_name else "Loaded config"
+            try:
+                self._log_config(f"{msg}")
+            except:
+                pass
+        except Exception as e:
+            log_print(f"[UI] Apply error: {e}")
+            try:
+                self._log_config(f"Apply error: {e}")
+            except:
+                pass
+
+    def _save_new_config(self):
+        name = simpledialog.askstring("Config name", "Enter the config name:")
+        if not name:
+            return
+        self._do_save(name)
+
+    def _save_config(self):
+        name = self.config_option.get() or "default"
+        self._do_save(name)
+
+    def _normalize_config_display_name(self, name):
+        normalized = str(name or "").strip()
+        if normalized.lower().endswith(".json"):
+            normalized = normalized[:-5]
+        if normalized.lower().endswith("_Centre"):
+            normalized = normalized[:-4]
+        normalized = normalized.strip()
+        return normalized or "default"
+
+    def _config_display_name_from_filename(self, filename):
+        base_name = str(filename or "").strip()
+        if base_name.lower().endswith(".json"):
+            base_name = base_name[:-5]
+        if base_name.lower().endswith("_Centre"):
+            base_name = base_name[:-4]
+        base_name = base_name.strip()
+        return base_name or "default"
+
+    def _config_filename_from_display_name(self, display_name):
+        normalized = self._normalize_config_display_name(display_name)
+        return f"{normalized}_Centre.json"
+
+    def _resolve_config_path(self, display_name, force_new_suffix=False):
+        normalized = self._normalize_config_display_name(display_name)
+        if force_new_suffix:
+            filename = self._config_filename_from_display_name(normalized)
+        else:
+            file_map = getattr(self, "_config_file_map", {})
+            filename = file_map.get(normalized) or self._config_filename_from_display_name(normalized)
+        return os.path.join("configs", filename), normalized
+
+    def _build_config_payload(self, data):
+        payload = {Centre_CONFIG_COMMENT_KEY: Centre_CONFIG_COMMENT_VALUE}
+        payload.update(dict(data or {}))
+        return payload
+
+    def _strip_config_metadata(self, data):
+        if not isinstance(data, dict):
+            return {}
+        cleaned = dict(data)
+        cleaned.pop(Centre_CONFIG_COMMENT_KEY, None)
+        return cleaned
+
+    def _has_valid_config_comment(self, data):
+        if not isinstance(data, dict):
+            return False
+        comment = str(data.get(Centre_CONFIG_COMMENT_KEY, "")).strip()
+        return comment == Centre_CONFIG_COMMENT_VALUE
+
+    def _config_fingerprint(self, data):
+        normalized = self._strip_config_metadata(data)
+        try:
+            return json.dumps(normalized, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            fallback = {str(k): str(v) for k, v in dict(normalized).items()}
+            return json.dumps(fallback, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+    def _load_importable_settings_from_json_file(self, file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            raw_data = json.load(f)
+        if not isinstance(raw_data, dict):
+            raise ValueError("Imported file must contain a JSON object.")
+        if not self._has_valid_config_comment(raw_data):
+            raise ValueError("Invalid config file: missing Centre colorBot comment marker.")
+        settings = self._strip_config_metadata(raw_data)
+        if not isinstance(settings, dict):
+            raise ValueError("Imported config payload is invalid.")
+        return settings
+
+    def _center_modal_window(self, window, width, height):
+        try:
+            window.update_idletasks()
+            if self.winfo_exists():
+                x = self.winfo_x() + max(0, (self.winfo_width() - width) // 2)
+                y = self.winfo_y() + max(0, (self.winfo_height() - height) // 2)
+            else:
+                x = max(0, (window.winfo_screenwidth() - width) // 2)
+                y = max(0, (window.winfo_screenheight() - height) // 2)
+            window.geometry(f"{width}x{height}+{x}+{y}")
+        except Exception:
+            window.geometry(f"{width}x{height}")
+
+    def _ask_dark_yes_no(self, title, message, yes_text="Yes", no_text="No"):
+        result = {"value": False}
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(title)
+        dialog.resizable(False, False)
+        dialog.configure(fg_color=COLOR_BG)
+        dialog.transient(self)
+        dialog.grab_set()
+        self._center_modal_window(dialog, 460, 190)
+
+        def _close_with(value):
+            result["value"] = bool(value)
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", lambda: _close_with(False))
+
+        frame = ctk.CTkFrame(dialog, fg_color=COLOR_BG, corner_radius=0)
+        frame.pack(fill="both", expand=True, padx=16, pady=14)
+
+        ctk.CTkLabel(
+            frame,
+            text=message,
+            text_color=COLOR_TEXT,
+            font=("Roboto", 12),
+            wraplength=420,
+            justify="left",
+            anchor="w",
+        ).pack(fill="x", pady=(8, 18))
+
+        btn_row = ctk.CTkFrame(frame, fg_color="transparent")
+        btn_row.pack(fill="x", side="bottom")
+
+        ctk.CTkButton(
+            btn_row,
+            text=no_text,
+            command=lambda: _close_with(False),
+            fg_color="transparent",
+            border_width=1,
+            border_color=COLOR_BORDER,
+            hover_color=COLOR_SURFACE,
+            text_color=COLOR_TEXT_DIM,
+            width=100,
+        ).pack(side="right")
+
+        ctk.CTkButton(
+            btn_row,
+            text=yes_text,
+            command=lambda: _close_with(True),
+            fg_color=COLOR_TEXT,
+            hover_color=COLOR_ACCENT_HOVER,
+            text_color=COLOR_BG,
+            width=100,
+        ).pack(side="right", padx=(0, 10))
+
+        dialog.wait_window()
+        return result["value"]
+
+    def _ask_dark_string(self, title, prompt, initialvalue=""):
+        result = {"value": None}
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(title)
+        dialog.resizable(False, False)
+        dialog.configure(fg_color=COLOR_BG)
+        dialog.transient(self)
+        dialog.grab_set()
+        self._center_modal_window(dialog, 500, 210)
+
+        def _close_with(value):
+            result["value"] = value
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", lambda: _close_with(None))
+
+        frame = ctk.CTkFrame(dialog, fg_color=COLOR_BG, corner_radius=0)
+        frame.pack(fill="both", expand=True, padx=16, pady=14)
+
+        ctk.CTkLabel(
+            frame,
+            text=prompt,
+            text_color=COLOR_TEXT,
+            font=("Roboto", 12),
+            anchor="w",
+            justify="left",
+            wraplength=460,
+        ).pack(fill="x", pady=(8, 10))
+
+        entry = ctk.CTkEntry(
+            frame,
+            fg_color=COLOR_SURFACE,
+            text_color=COLOR_TEXT,
+            border_color=COLOR_BORDER,
+        )
+        entry.pack(fill="x", pady=(0, 18))
+        entry.insert(0, str(initialvalue or ""))
+        entry.focus_set()
+        entry.select_range(0, "end")
+
+        def _confirm():
+            _close_with(entry.get().strip())
+
+        btn_row = ctk.CTkFrame(frame, fg_color="transparent")
+        btn_row.pack(fill="x", side="bottom")
+
+        ctk.CTkButton(
+            btn_row,
+            text="Cancel",
+            command=lambda: _close_with(None),
+            fg_color="transparent",
+            border_width=1,
+            border_color=COLOR_BORDER,
+            hover_color=COLOR_SURFACE,
+            text_color=COLOR_TEXT_DIM,
+            width=100,
+        ).pack(side="right")
+
+        ctk.CTkButton(
+            btn_row,
+            text="OK",
+            command=_confirm,
+            fg_color=COLOR_TEXT,
+            hover_color=COLOR_ACCENT_HOVER,
+            text_color=COLOR_BG,
+            width=100,
+        ).pack(side="right", padx=(0, 10))
+
+        dialog.bind("<Return>", lambda _evt: _confirm())
+        dialog.bind("<Escape>", lambda _evt: _close_with(None))
+        dialog.wait_window()
+        return result["value"]
+
+    def _import_config_settings(self, settings, source_name, import_title="Import", source_path=None, use_dark_dialog=False):
+        data = self._build_config_payload(settings)
+        target_path, normalized_name = self._resolve_config_path(source_name, force_new_suffix=True)
+
+        if os.path.exists(target_path):
+            same_source = False
+            if source_path:
+                try:
+                    same_source = os.path.abspath(target_path) == os.path.abspath(source_path)
+                except Exception:
+                    same_source = False
+            if not same_source:
+                prompt_text = f"Profile '{normalized_name}' already exists. Overwrite it?"
+                if use_dark_dialog:
+                    should_overwrite = self._ask_dark_yes_no(import_title, prompt_text)
+                else:
+                    should_overwrite = messagebox.askyesno(import_title, prompt_text)
+                if not should_overwrite:
+                    self._log_config(f"{import_title} canceled: {normalized_name}")
+                    return False, normalized_name
+
+        with open(target_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+
+        self._refresh_config_list()
+        if hasattr(self, "config_option") and self.config_option.winfo_exists():
+            self.config_option.set(normalized_name)
+        self._apply_settings(settings, config_name=normalized_name)
+        self._log_config(f"Imported: {normalized_name}")
+        return True, normalized_name
+
+    def _get_clipboard_file_paths(self):
+        if os.name != "nt" or USER32 is None or SHELL32 is None:
+            return []
+
+        if not USER32.OpenClipboard(None):
+            return []
+
+        try:
+            if not USER32.IsClipboardFormatAvailable(CF_HDROP):
+                return []
+            h_drop = USER32.GetClipboardData(CF_HDROP)
+            if not h_drop:
+                return []
+
+            file_paths = []
+            count = int(SHELL32.DragQueryFileW(h_drop, DRAG_QUERY_FILE_COUNT, None, 0))
+            for idx in range(count):
+                length = int(SHELL32.DragQueryFileW(h_drop, idx, None, 0))
+                if length <= 0:
+                    continue
+                buffer = ctypes.create_unicode_buffer(length + 1)
+                copied = int(SHELL32.DragQueryFileW(h_drop, idx, buffer, length + 1))
+                if copied <= 0:
+                    continue
+                path = str(buffer.value).strip()
+                if path:
+                    file_paths.append(path)
+            return file_paths
+        finally:
+            USER32.CloseClipboard()
+
+    def _get_clipboard_import_candidate(self):
+        try:
+            clipboard_text = str(self.clipboard_get() or "").strip()
+        except tk.TclError:
+            clipboard_text = ""
+        except Exception:
+            clipboard_text = ""
+
+        if clipboard_text:
+            try:
+                raw_data = json.loads(clipboard_text)
+                if isinstance(raw_data, dict) and self._has_valid_config_comment(raw_data):
+                    settings = self._strip_config_metadata(raw_data)
+                    return settings, "clipboard", "clipboard text"
+            except Exception:
+                pass
+
+            potential_path = clipboard_text.strip().strip("\"'")
+            if os.path.isfile(potential_path) and str(potential_path).lower().endswith(".json"):
+                try:
+                    settings = self._load_importable_settings_from_json_file(potential_path)
+                    source_name = self._normalize_config_display_name(
+                        os.path.splitext(os.path.basename(potential_path))[0]
+                    )
+                    return settings, source_name, f"clipboard path: {potential_path}"
+                except Exception:
+                    pass
+
+        for file_path in self._get_clipboard_file_paths():
+            if not str(file_path).lower().endswith(".json"):
+                continue
+            try:
+                settings = self._load_importable_settings_from_json_file(file_path)
+                source_name = self._normalize_config_display_name(
+                    os.path.splitext(os.path.basename(file_path))[0]
+                )
+                return settings, source_name, f"clipboard file: {file_path}"
+            except Exception:
+                continue
+
+        return None
+
+    def _poll_clipboard_config_import(self):
+        try:
+            self._maybe_prompt_clipboard_config_import()
+        except Exception as e:
+            log_print(f"[UI] Clipboard config poll error: {e}")
+        finally:
+            try:
+                if self.winfo_exists():
+                    self.after(self._clipboard_import_poll_interval_ms, self._poll_clipboard_config_import)
+            except Exception:
+                pass
+
+    def _maybe_prompt_clipboard_config_import(self):
+        if str(getattr(self, "_active_tab_name", "")) != "Config":
+            return
+        if not hasattr(self, "config_option") or not self.config_option.winfo_exists():
+            return
+        if self._clipboard_import_prompt_open:
+            return
+
+        candidate = self._get_clipboard_import_candidate()
+        if not candidate:
+            return
+
+        settings, suggested_name, source_label = candidate
+        current_settings = self._strip_config_metadata(self._get_current_settings())
+        current_fingerprint = self._config_fingerprint(current_settings)
+        incoming_fingerprint = self._config_fingerprint(settings)
+
+        if incoming_fingerprint in self._clipboard_import_imported_signatures:
+            return
+
+        if incoming_fingerprint == current_fingerprint:
+            return
+
+        if (
+            incoming_fingerprint == self._clipboard_import_last_declined_signature
+            and current_fingerprint == self._clipboard_import_last_declined_config_fingerprint
+        ):
+            return
+
+        self._clipboard_import_prompt_open = True
+        try:
+            should_import = self._ask_dark_yes_no(
+                "Import",
+                "Detected a Centre config in clipboard. Do you want to import it?",
+            )
+            if not should_import:
+                self._clipboard_import_last_declined_signature = incoming_fingerprint
+                self._clipboard_import_last_declined_config_fingerprint = current_fingerprint
+                self._log_config(f"Clipboard import skipped: {source_label}")
+                return
+
+            default_name = self._normalize_config_display_name(suggested_name or "clipboard")
+            entered_name = self._ask_dark_string(
+                "Config name",
+                "Enter the config name:",
+                initialvalue=default_name,
+            )
+            if not entered_name:
+                self._clipboard_import_last_declined_signature = incoming_fingerprint
+                self._clipboard_import_last_declined_config_fingerprint = current_fingerprint
+                self._log_config("Clipboard import canceled: no config name.")
+                return
+
+            success, normalized_name = self._import_config_settings(
+                settings,
+                source_name=entered_name,
+                import_title="Import",
+                use_dark_dialog=True,
+            )
+            if success:
+                self._clipboard_import_last_declined_signature = None
+                self._clipboard_import_last_declined_config_fingerprint = None
+                self._clipboard_import_imported_signatures.add(incoming_fingerprint)
+                messagebox.showinfo("Import", f"Imported config: {normalized_name}")
+            else:
+                self._clipboard_import_last_declined_signature = incoming_fingerprint
+                self._clipboard_import_last_declined_config_fingerprint = current_fingerprint
+        finally:
+            self._clipboard_import_prompt_open = False
+
+    def _copy_file_to_clipboard(self, file_path):
+        if os.name != "nt" or USER32 is None or KERNEL32 is None:
+            raise RuntimeError("File clipboard export is only supported on Windows.")
+
+        abs_path = os.path.abspath(file_path)
+        if not os.path.isfile(abs_path):
+            raise FileNotFoundError(abs_path)
+
+        file_list_bytes = f"{abs_path}\0\0".encode("utf-16-le")
+        dropfiles = DROPFILES()
+        dropfiles.pFiles = ctypes.sizeof(DROPFILES)
+        dropfiles.pt_x = 0
+        dropfiles.pt_y = 0
+        dropfiles.fNC = False
+        dropfiles.fWide = True
+
+        total_size = ctypes.sizeof(DROPFILES) + len(file_list_bytes)
+        h_global = KERNEL32.GlobalAlloc(GHND, total_size)
+        if not h_global:
+            raise OSError("Failed to allocate clipboard memory.")
+
+        locked_mem = KERNEL32.GlobalLock(h_global)
+        if not locked_mem:
+            KERNEL32.GlobalFree(h_global)
+            raise OSError("Failed to lock clipboard memory.")
+
+        try:
+            ctypes.memmove(locked_mem, ctypes.byref(dropfiles), ctypes.sizeof(DROPFILES))
+            ctypes.memmove(int(locked_mem) + ctypes.sizeof(DROPFILES), file_list_bytes, len(file_list_bytes))
+        finally:
+            KERNEL32.GlobalUnlock(h_global)
+
+        if not USER32.OpenClipboard(None):
+            KERNEL32.GlobalFree(h_global)
+            raise OSError("Failed to open clipboard.")
+
+        try:
+            if not USER32.EmptyClipboard():
+                KERNEL32.GlobalFree(h_global)
+                raise OSError("Failed to empty clipboard.")
+            if not USER32.SetClipboardData(CF_HDROP, h_global):
+                KERNEL32.GlobalFree(h_global)
+                raise OSError("Failed to set clipboard data.")
+            h_global = None
+        finally:
+            USER32.CloseClipboard()
+
+    def _do_save(self, name):
+        path, normalized_name = self._resolve_config_path(name, force_new_suffix=True)
+        settings = self._get_current_settings()
+        data = self._build_config_payload(settings)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+            self._refresh_config_list()
+            self.config_option.set(normalized_name)
+            self._log_config(f"Saved: {normalized_name}")
+        except Exception as e:
+            self._log_config(f"Save error: {e}")
+
+    def _load_selected_config(self):
+        path, normalized_name = self._resolve_config_path(self.config_option.get())
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("Config file must contain a JSON object.")
+            settings = self._strip_config_metadata(data)
+            self._apply_settings(settings, config_name=normalized_name)
+        except Exception as e:
+            self._log_config(f"Load error: {e}")
+
+    def _export_selected_config(self):
+        path, normalized_name = self._resolve_config_path(self.config_option.get())
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw_data = json.load(f)
+            if not isinstance(raw_data, dict):
+                raise ValueError("Config file must contain a JSON object.")
+
+            settings = self._strip_config_metadata(raw_data)
+            export_payload = self._build_config_payload(settings)
+            if raw_data != export_payload:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(export_payload, f, indent=4, ensure_ascii=False)
+
+            self._copy_file_to_clipboard(path)
+            self._log_config(f"Exported file to clipboard: {normalized_name}")
+            messagebox.showinfo("Export", "Config file copied to clipboard. You can now paste it elsewhere.")
+        except Exception as e:
+            self._log_config(f"Export error: {e}")
+            messagebox.showerror("Export", f"Export failed:\n{e}")
+
+    def _import_config_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Import config file",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+
+        try:
+            settings = self._load_importable_settings_from_json_file(file_path)
+            source_name = self._normalize_config_display_name(os.path.splitext(os.path.basename(file_path))[0])
+            success, normalized_name = self._import_config_settings(
+                settings,
+                source_name=source_name,
+                import_title="Import",
+                source_path=file_path,
+                use_dark_dialog=True,
+            )
+            if success:
+                messagebox.showinfo("Import", f"Imported config: {normalized_name}")
+        except Exception as e:
+            self._log_config(f"Import error: {e}")
+            messagebox.showerror("Import", f"Import failed:\n{e}")
+
+    def _delete_selected_config(self):
+        try:
+            self._refresh_config_list()
+            file_map = dict(getattr(self, "_config_file_map", {}))
+            display_names = sorted(file_map.keys(), key=lambda item: str(item).lower())
+
+            if len(display_names) <= 1:
+                self._log_config("Delete blocked: at least one config must remain.")
+                messagebox.showwarning("Delete", "At least one config must remain.")
+                return
+
+            selected = self._normalize_config_display_name(self.config_option.get())
+            if selected not in file_map:
+                selected = display_names[0]
+
+            filename = file_map.get(selected)
+            if not filename:
+                self._log_config("Delete error: no config selected.")
+                return
+
+            target_path = os.path.join("configs", filename)
+            if not os.path.isfile(target_path):
+                self._log_config(f"Delete error: file not found ({selected})")
+                messagebox.showerror("Delete", f"Config file not found:\n{target_path}")
+                return
+
+            should_delete = self._ask_dark_yes_no(
+                "Delete",
+                f"Delete config '{selected}'?\nThis action cannot be undone.",
+                yes_text="Delete",
+                no_text="Cancel",
+            )
+            if not should_delete:
+                self._log_config(f"Delete canceled: {selected}")
+                return
+
+            os.remove(target_path)
+            self._log_config(f"Deleted: {selected}")
+            self._refresh_config_list()
+        except Exception as e:
+            self._log_config(f"Delete error: {e}")
+            messagebox.showerror("Delete", f"Delete failed:\n{e}")
+
+    def _refresh_config_list(self):
+        raw_files = [f for f in os.listdir("configs") if str(f).lower().endswith(".json")]
+        file_map = {}
+        for filename in sorted(raw_files, key=lambda item: str(item).lower()):
+            display_name = self._config_display_name_from_filename(filename)
+            existing = file_map.get(display_name)
+            if existing:
+                existing_is_new = str(existing).lower().endswith("_Centre.json")
+                current_is_new = str(filename).lower().endswith("_Centre.json")
+                if existing_is_new and not current_is_new:
+                    continue
+                if current_is_new and not existing_is_new:
+                    file_map[display_name] = filename
+                continue
+            file_map[display_name] = filename
+
+        if not file_map:
+            file_map = {"default": self._config_filename_from_display_name("default")}
+
+        self._config_file_map = file_map
+        display_names = sorted(file_map.keys(), key=lambda item: str(item).lower())
+        current = self._normalize_config_display_name(self.config_option.get())
+
+        self.config_option.configure(values=display_names)
+        if current in display_names:
+            self.config_option.set(current)
+        else:
+            self.config_option.set(display_names[0])
+
+    def _on_config_selected(self, val):
+        self._log_config(f"Selected config: {self._normalize_config_display_name(val)}")
+
+    def _log_config(self, msg):
+        try:
+            self.config_log.insert("end", f"> {msg}\n")
+            self.config_log.see("end")
+        except: pass
+
+    # --- NDI & Capture Callbacks ---
+    
+    def _on_capture_method_changed(self, val):
+        self.capture_method_var.set(val)
+        self.capture.set_mode(val)
+        normalized_mode = self.capture.mode
+        self.capture_method_var.set(normalized_mode)
+        config.capture_mode = normalized_mode
+        self._update_capture_ui()
+        self._set_status_indicator(f"Status: Mode {normalized_mode}", COLOR_TEXT)
+
+    def _process_source_updates(self):
+        if self.capture.mode == "NDI":
+            updates = self.capture.ndi.get_pending_source_updates()
+            for names in updates:
+                self._apply_sources_to_ui(names)
+        self.after(100, self._process_source_updates)
+
+    def _refresh_sources(self):
+        if self.capture.mode == "NDI":
+            names = self.capture.ndi.refresh_sources()
+            self._apply_sources_to_ui(names)
+            self._set_status_indicator("Status: Refreshing NDI", COLOR_TEXT)
+
+    def _update_ndi_fov_slider_max(self, width, height):
+        """é‡å­˜æŸŠ NDI FOV å©Šæˆžî–‚é¨å‹¬æ¸¶æ¾¶Ñƒâ‚¬ç¡·ç´™å§ï½†æŸŸè¤°ãˆ£î—†é’å›·ç´æµ£è·¨æ•¤æ“å†¨çš¬é¨å‹«æ˜‚ç€µé©ç´š"""
+        if hasattr(self, 'ndi_fov_slider') and self.ndi_fov_slider.winfo_exists():
+            # å§ï½†æŸŸè¤°ãˆ£î—†é’å›·ç´éˆâ‚¬æ¾¶Ñƒâ‚¬è‰°Åéå“„î‡¡æ´ï¹€æ‹°æ¥‚æ¨ºå®³æ¶“î…¡ç´”çå¿•æ®‘æ¶“â‚¬é—?
+            max_fov = max(16, min(width, height) // 2) if (width and height) else 1920
+            self.ndi_fov_slider.configure(to=max_fov)
+            # æ¿¡å‚›ç‰é£è·ºå¢ éŠè‰°ç§´é–¬åº¢æŸŠé¨å‹¬æ¸¶æ¾¶Ñƒâ‚¬ç¡·ç´ç‘¾æŒŽæš£éçƒ˜æ¸¶æ¾¶Ñƒâ‚¬?
+            current_val = int(getattr(config, "ndi_fov", 320))
+            if current_val > max_fov:
+                config.ndi_fov = max_fov
+                self.ndi_fov_slider.set(max_fov)
+                if hasattr(self, 'ndi_fov_entry') and self.ndi_fov_entry.winfo_exists():
+                    self.ndi_fov_entry.delete(0, "end")
+                    self.ndi_fov_entry.insert(0, str(max_fov))
+            # é‡å­˜æŸŠç’©å›ªâ–•æ¤¤îˆœãš
+            self._update_ndi_fov_info()
+    
+    def _update_udp_fov_slider_max(self, width, height):
+        """é‡å­˜æŸŠ UDP FOV å©Šæˆžî–‚é¨å‹¬æ¸¶æ¾¶Ñƒâ‚¬ç¡·ç´™å§ï½†æŸŸè¤°ãˆ£î—†é’å›·ç´æµ£è·¨æ•¤æ“å†¨çš¬é¨å‹«æ˜‚ç€µé©ç´š"""
+        if hasattr(self, 'udp_fov_slider') and self.udp_fov_slider.winfo_exists():
+            # å§ï½†æŸŸè¤°ãˆ£î—†é’å›·ç´éˆâ‚¬æ¾¶Ñƒâ‚¬è‰°Åéå“„î‡¡æ´ï¹€æ‹°æ¥‚æ¨ºå®³æ¶“î…¡ç´”çå¿•æ®‘æ¶“â‚¬é—?
+            max_fov = max(16, min(width, height) // 2) if (width and height) else 1920
+            self.udp_fov_slider.configure(to=max_fov)
+            # æ¿¡å‚›ç‰é£è·ºå¢ éŠè‰°ç§´é–¬åº¢æŸŠé¨å‹¬æ¸¶æ¾¶Ñƒâ‚¬ç¡·ç´ç‘¾æŒŽæš£éçƒ˜æ¸¶æ¾¶Ñƒâ‚¬?
+            current_val = int(getattr(config, "udp_fov", 320))
+            if current_val > max_fov:
+                config.udp_fov = max_fov
+                self.udp_fov_slider.set(max_fov)
+                if hasattr(self, 'udp_fov_entry') and self.udp_fov_entry.winfo_exists():
+                    self.udp_fov_entry.delete(0, "end")
+                    self.udp_fov_entry.insert(0, str(max_fov))
+            # é‡å­˜æŸŠç’©å›ªâ–•æ¤¤îˆœãš
+            self._update_udp_fov_info()
+    
+    def _connect_to_selected(self):
+        if self.capture.mode == "NDI":
+            sources = self.capture.ndi.get_source_list()
+            if not sources: return
+            
+            selected = self.source_option.get()
+            if selected and selected not in ["(no sources)", "(Scanning...)"]:
+                self.capture.ndi.set_selected_source(selected)
+                # æ·‡æ¿†ç“¨é–¬é•è…‘é¨?NDI å©§?
+                self.saved_ndi_source = selected
+                config.last_ndi_source = selected
+            
+            success, error = self.capture.connect_ndi(selected)
+            if success:
+                self._set_status_indicator("Status: NDI connected", COLOR_TEXT)
+                # é–«ï½†å¸´éŽ´æ„¬å§›å¯°å²‹ç´é¢æ¥„â”‚é›æ’å½‡é£î‚¦æ½°çå“„î‡­æ¶“ï¸½æ´¿é‚ç‰ˆç²¦å§Šæ¿‡æ¸¶æ¾¶Ñƒâ‚¬?
+                self.after(500, self._update_ndi_fov_sliders_after_connect)  # å¯¤å •ä¼ˆæ¶“â‚¬æ¦›ç‚°äº’çº°è½°ç¹šé£î‚¦æ½°å®¸å‰ç°´éŒæ¬ã‚½
+            else:
+                self._set_status_indicator(f"Status: NDI error: {error}", COLOR_DANGER)
+    
+    def _update_ndi_fov_sliders_after_connect(self):
+        """é–«ï½†å¸´éŽ´æ„¬å§›å¯°å±¾æ´¿é‚?NDI FOV å©Šæˆžî–‚é¨å‹¬æ¸¶æ¾¶Ñƒâ‚¬?"""
+        width, height = self.capture.get_frame_dimensions()
+        if width and height:
+            self._update_ndi_fov_slider_max(width, height)
+            log_print(f"[UI] NDI frame dimensions: {width}x{height}, updated FOV slider max values")
+            if hasattr(self, '_ndi_retry_count'):
+                self._ndi_retry_count = 0
+        else:
+            # æ¿¡å‚›ç‰ç»—îƒ¿ç«´å¨†ï¼„åµ…é™æ §ã‘éæ¥‹ç´éå¶ˆâ”‚æ¶“â‚¬å¨†â˜…ç´™éˆâ‚¬æ¾¶æ°³â”‚3å¨†â˜…ç´š
+            if not hasattr(self, '_ndi_retry_count'):
+                self._ndi_retry_count = 0
+            self._ndi_retry_count += 1
+            if self._ndi_retry_count < 3:
+                self.after(500, self._update_ndi_fov_sliders_after_connect)
+            else:
+                self._ndi_retry_count = 0
+                
+    def _connect_udp(self):
+        if self.capture.mode in ("UDP", "UDP v1.5"):
+            ip = self.udp_ip_entry.get()
+            port = self.udp_port_entry.get()
+            
+            # æ·‡æ¿†ç“¨é’æ¿åŽç€›æ¨ºæ‹° config
+            self.saved_udp_ip = ip
+            self.saved_udp_port = port
+            config.udp_ip = ip
+            config.udp_port = port
+            
+            success, error = self.capture.connect_udp(ip, port)
+            if success:
+                mode_label = self.capture.mode
+                self._set_status_indicator(f"Status: {mode_label} connected", COLOR_TEXT)
+                # é–«ï½†å¸´éŽ´æ„¬å§›å¯°å²‹ç´é¢æ¥„â”‚é›æ’å½‡é£î‚¦æ½°çå“„î‡­æ¶“ï¸½æ´¿é‚ç‰ˆç²¦å§Šæ¿‡æ¸¶æ¾¶Ñƒâ‚¬?
+                self.after(500, self._update_udp_fov_sliders_after_connect)  # å¯¤å •ä¼ˆæ¶“â‚¬æ¦›ç‚°äº’çº°è½°ç¹šé£î‚¦æ½°å®¸å‰ç°´éŒæ¬ã‚½
+            else:
+                mode_label = self.capture.mode
+                self._set_status_indicator(f"Status: {mode_label} connect failed: {error}", COLOR_DANGER)
+                log_print(f"[UI] {mode_label} connection failed: {error}")
+    
+    def _update_udp_fov_sliders_after_connect(self):
+        """é–«ï½†å¸´éŽ´æ„¬å§›å¯°å±¾æ´¿é‚?UDP FOV å©Šæˆžî–‚é¨å‹¬æ¸¶æ¾¶Ñƒâ‚¬?"""
+        width, height = self.capture.get_frame_dimensions()
+        if width and height:
+            self._update_udp_fov_slider_max(width, height)
+            log_print(f"[UI] UDP frame dimensions: {width}x{height}, updated FOV slider max values")
+        else:
+            # æ¿¡å‚›ç‰ç»—îƒ¿ç«´å¨†ï¼„åµ…é™æ §ã‘éæ¥‹ç´éå¶ˆâ”‚æ¶“â‚¬å¨†â˜…ç´™éˆâ‚¬æ¾¶æ°³â”‚3å¨†â˜…ç´š
+            if not hasattr(self, '_udp_retry_count'):
+                self._udp_retry_count = 0
+            self._udp_retry_count += 1
+            if self._udp_retry_count < 3:
+                self.after(500, self._update_udp_fov_sliders_after_connect)
+            else:
+                self._udp_retry_count = 0
+    
+    def _connect_capture_card(self):
+        """é–«ï½†å¸´ CaptureCard"""
+        if self.capture.mode == "CaptureCard":
+            # çº°è½°ç¹šé–°å¶‡ç–†å®¸å‰æ´¿é‚?
+            if hasattr(self, 'capture_card_device_entry'):
+                try:
+                    device_index = int(self.capture_card_device_entry.get())
+                    config.capture_device_index = device_index
+                except ValueError:
+                    pass
+            
+            if hasattr(self, 'capture_card_width_entry') and hasattr(self, 'capture_card_height_entry'):
+                try:
+                    width = int(self.capture_card_width_entry.get())
+                    height = int(self.capture_card_height_entry.get())
+                    config.capture_width = width
+                    config.capture_height = height
+                    # é‡å­˜æŸŠæ¶“î…žç¸¾æ¦›ç‚ºâ€™ç»€çŒ´ç´™é¥çŠµå¤é’å—šé²¸éœå›¨æ•¼ç’å©‚å½²é‘³è—‰å¥–é—Šå¤¸è…‘è¹‡å†®ç²¸é”›?
+                    self._update_capture_card_center_display()
+                except ValueError:
+                    pass
+            
+            if hasattr(self, 'capture_card_fps_entry'):
+                try:
+                    fps = float(self.capture_card_fps_entry.get())
+                    config.capture_fps = fps
+                except ValueError:
+                    pass
+            
+            # é‡å­˜æŸŠæ¶“î…žç¸¾æ¦›ç‚ºâ€™ç»€?
+            self._update_capture_card_center_display()
+            
+            success, error = self.capture.connect_capture_card(config)
+            if success:
+                self._set_status_indicator("Status: CaptureCard connected", COLOR_TEXT)
+            else:
+                self._set_status_indicator(f"Status: CaptureCard connect failed: {error}", COLOR_DANGER)
+                log_print(f"[UI] CaptureCard connection failed: {error}")
+
+    # --- MSS Callbacks ---
+    def _on_mss_monitor_changed(self, event=None):
+        """MSS Monitor Index é€ç¡…ç•©"""
+        if hasattr(self, 'mss_monitor_entry') and self.mss_monitor_entry.winfo_exists():
+            try:
+                val = int(self.mss_monitor_entry.get())
+                config.mss_monitor_index = val
+            except ValueError:
+                pass
+    
+    def _on_mss_fov_x_slider_changed(self, val):
+        """MSS FOV X å©Šæˆžî–‚é€ç¡…ç•©"""
+        int_val = int(round(val))
+        config.mss_fov_x = int_val
+        if hasattr(self, 'mss_fov_x_entry') and self.mss_fov_x_entry.winfo_exists():
+            self.mss_fov_x_entry.delete(0, "end")
+            self.mss_fov_x_entry.insert(0, str(int_val))
+        self._update_mss_capture_info()
+        # é—è™«æªªé‡å­˜æŸŠå®¸æŸ¥â‚¬ï½†å¸´é¨?MSS éŽ¿å³°å½‡é£?
+        if self.capture.mss_capture and self.capture.mss_capture.is_connected():
+            fov_y = int(getattr(config, "mss_fov_y", 320))
+            self.capture.mss_capture.set_fov(int_val, fov_y)
+    
+    def _on_mss_fov_x_entry_changed(self, event=None):
+        """MSS FOV X æ“ç¨¿å†å¦—å—˜æ•¼ç’?"""
+        if hasattr(self, 'mss_fov_x_entry') and self.mss_fov_x_entry.winfo_exists():
+            try:
+                val = int(self.mss_fov_x_entry.get())
+                val = max(16, min(1920, val))
+                config.mss_fov_x = val
+                if hasattr(self, 'mss_fov_x_slider'):
+                    self.mss_fov_x_slider.set(val)
+                self._update_mss_capture_info()
+                if self.capture.mss_capture and self.capture.mss_capture.is_connected():
+                    fov_y = int(getattr(config, "mss_fov_y", 320))
+                    self.capture.mss_capture.set_fov(val, fov_y)
+            except ValueError:
+                pass
+    
+    def _on_mss_fov_y_slider_changed(self, val):
+        """MSS FOV Y å©Šæˆžî–‚é€ç¡…ç•©"""
+        int_val = int(round(val))
+        config.mss_fov_y = int_val
+        if hasattr(self, 'mss_fov_y_entry') and self.mss_fov_y_entry.winfo_exists():
+            self.mss_fov_y_entry.delete(0, "end")
+            self.mss_fov_y_entry.insert(0, str(int_val))
+        self._update_mss_capture_info()
+        if self.capture.mss_capture and self.capture.mss_capture.is_connected():
+            fov_x = int(getattr(config, "mss_fov_x", 320))
+            self.capture.mss_capture.set_fov(fov_x, int_val)
+    
+    def _on_mss_fov_y_entry_changed(self, event=None):
+        """MSS FOV Y æ“ç¨¿å†å¦—å—˜æ•¼ç’?"""
+        if hasattr(self, 'mss_fov_y_entry') and self.mss_fov_y_entry.winfo_exists():
+            try:
+                val = int(self.mss_fov_y_entry.get())
+                val = max(16, min(1080, val))
+                config.mss_fov_y = val
+                if hasattr(self, 'mss_fov_y_slider'):
+                    self.mss_fov_y_slider.set(val)
+                self._update_mss_capture_info()
+                if self.capture.mss_capture and self.capture.mss_capture.is_connected():
+                    fov_x = int(getattr(config, "mss_fov_x", 320))
+                    self.capture.mss_capture.set_fov(fov_x, val)
+            except ValueError:
+                pass
+    
+    def _update_mss_capture_info(self):
+        """é‡å­˜æŸŠ MSS éŽ¿å³°å½‡ç»¡å‹«æ¹‡ç’©å›ªâ–•æ¤¤îˆœãš"""
+        if hasattr(self, 'mss_capture_info_label') and self.mss_capture_info_label.winfo_exists():
+            fov_x = int(getattr(config, "mss_fov_x", 320))
+            fov_y = int(getattr(config, "mss_fov_y", 320))
+            total_w = fov_x * 2
+            total_h = fov_y * 2
+            self.mss_capture_info_label.configure(
+                text=f"Capture area: {total_w} x {total_h} px (centered on screen)"
+            )
+    
+    def _connect_mss(self):
+        """é–«ï½†å¸´ MSS é“»ãˆ ç®·éŽ¿å³°å½‡"""
+        if self.capture.mode == "MSS":
+            monitor_index = int(getattr(config, "mss_monitor_index", 1))
+            fov_x = int(getattr(config, "mss_fov_x", 320))
+            fov_y = int(getattr(config, "mss_fov_y", 320))
+            
+            # å¯°ç‚¶å‡ éãƒ¦î”‹é‡å­˜æŸŠ
+            if hasattr(self, 'mss_monitor_entry') and self.mss_monitor_entry.winfo_exists():
+                try:
+                    monitor_index = int(self.mss_monitor_entry.get())
+                    config.mss_monitor_index = monitor_index
+                except ValueError:
+                    pass
+            
+            success, error = self.capture.connect_mss(monitor_index, fov_x, fov_y)
+            if success:
+                self._set_status_indicator(f"Status: MSS connected (Monitor {monitor_index})", COLOR_TEXT)
+            else:
+                self._set_status_indicator(f"Status: MSS connect failed: {error}", COLOR_DANGER)
+                log_print(f"[UI] MSS connection failed: {error}")
+    
+    # --- NDI FOV Callbacks ---
+    def _on_ndi_fov_enabled_changed(self):
+        """NDI FOV éŸç†ºæ•¤é™â‚¬éŽ±å¬«æ•¼ç’?"""
+        if hasattr(self, 'var_ndi_fov_enabled'):
+            config.ndi_fov_enabled = self.var_ndi_fov_enabled.get()
+    
+    def _on_ndi_fov_slider_changed(self, val):
+        """NDI FOV å©Šæˆžî–‚é€ç¡…ç•©"""
+        int_val = int(round(val))
+        config.ndi_fov = int_val
+        if hasattr(self, 'ndi_fov_entry') and self.ndi_fov_entry.winfo_exists():
+            self.ndi_fov_entry.delete(0, "end")
+            self.ndi_fov_entry.insert(0, str(int_val))
+        self._update_ndi_fov_info()
+    
+    def _on_ndi_fov_entry_changed(self, event=None):
+        """NDI FOV æ“ç¨¿å†å¦—å—˜æ•¼ç’?"""
+        if hasattr(self, 'ndi_fov_entry') and self.ndi_fov_entry.winfo_exists():
+            try:
+                val = int(self.ndi_fov_entry.get())
+                val = max(16, min(1920, val))
+                config.ndi_fov = val
+                if hasattr(self, 'ndi_fov_slider'):
+                    self.ndi_fov_slider.set(val)
+                self._update_ndi_fov_info()
+            except ValueError:
+                pass
+    
+    def _update_ndi_fov_info(self):
+        """é‡å­˜æŸŠ NDI ç‘ä½¸åžç»¡å‹«æ¹‡ç’©å›ªâ–•æ¤¤îˆœãš"""
+        if hasattr(self, 'ndi_fov_info_label') and self.ndi_fov_info_label.winfo_exists():
+            fov = int(getattr(config, "ndi_fov", 320))
+            total_size = fov * 2
+            self.ndi_fov_info_label.configure(
+                text=f"Crop area: {total_size} x {total_size} px (square, centered on frame)"
+            )
+    
+    # --- UDP FOV Callbacks ---
+    def _on_udp_fov_enabled_changed(self):
+        """UDP FOV éŸç†ºæ•¤é™â‚¬éŽ±å¬«æ•¼ç’?"""
+        if hasattr(self, 'var_udp_fov_enabled'):
+            config.udp_fov_enabled = self.var_udp_fov_enabled.get()
+    
+    def _on_udp_fov_slider_changed(self, val):
+        """UDP FOV å©Šæˆžî–‚é€ç¡…ç•©"""
+        int_val = int(round(val))
+        config.udp_fov = int_val
+        if hasattr(self, 'udp_fov_entry') and self.udp_fov_entry.winfo_exists():
+            self.udp_fov_entry.delete(0, "end")
+            self.udp_fov_entry.insert(0, str(int_val))
+        self._update_udp_fov_info()
+    
+    def _on_udp_fov_entry_changed(self, event=None):
+        """UDP FOV æ“ç¨¿å†å¦—å—˜æ•¼ç’?"""
+        if hasattr(self, 'udp_fov_entry') and self.udp_fov_entry.winfo_exists():
+            try:
+                val = int(self.udp_fov_entry.get())
+                val = max(16, min(1920, val))
+                config.udp_fov = val
+                if hasattr(self, 'udp_fov_slider'):
+                    self.udp_fov_slider.set(val)
+                self._update_udp_fov_info()
+            except ValueError:
+                pass
+    
+    def _update_udp_fov_info(self):
+        """é‡å­˜æŸŠ UDP ç‘ä½¸åžç»¡å‹«æ¹‡ç’©å›ªâ–•æ¤¤îˆœãš"""
+        if hasattr(self, 'udp_fov_info_label') and self.udp_fov_info_label.winfo_exists():
+            fov = int(getattr(config, "udp_fov", 320))
+            total_size = fov * 2
+            self.udp_fov_info_label.configure(
+                text=f"Crop area: {total_size} x {total_size} px (square, centered on frame)"
+            )
+
+    def _normalize_mouse_api_name(self, mode):
+        mode_norm = str(mode).strip().lower()
+        if mode_norm == "net":
+            return "Net"
+        if mode_norm in ("kmboxa", "kmboxa_api", "kmboxaapi", "kma", "kmboxa-api"):
+            return "KmboxA"
+        if mode_norm == "dhz":
+            return "DHZ"
+        if mode_norm in ("makv2binary", "makv2_binary", "makv2-binary", "binary"):
+            return "MakV2Binary"
+        if mode_norm in ("makv2", "mak_v2", "mak-v2"):
+            return "MakV2"
+        if mode_norm == "arduino":
+            return "Arduino"
+        if mode_norm in ("sendinput", "win32", "win32api", "win32_sendinput", "win32-sendinput"):
+            return "SendInput"
+        if mode_norm == "ferrum":
+            return "Ferrum"
+        return "Serial"
+
+    def _supports_trigger_strafe_ui(self, mode=None) -> bool:
+        selected_mode = mode if mode is not None else getattr(config, "mouse_api", "Serial")
+        try:
+            from src.utils import mouse as mouse_backend
+
+            return bool(mouse_backend.supports_trigger_strafe_ui(selected_mode))
+        except Exception:
+            normalized = self._normalize_mouse_api_name(selected_mode)
+            return normalized in {"SendInput", "Net", "KmboxA", "DHZ", "Ferrum"}
+
+    def _supports_keyboard_state(self, mode=None) -> bool:
+        selected_mode = mode if mode is not None else getattr(config, "mouse_api", "Serial")
+        try:
+            from src.utils import mouse as mouse_backend
+
+            return bool(mouse_backend.supports_keyboard_state(selected_mode))
+        except Exception:
+            normalized = self._normalize_mouse_api_name(selected_mode)
+            return normalized in {"SendInput", "Net", "KmboxA", "DHZ"}
+
+    def _toggle_hardware_info_details(self):
+        self._hardware_info_expanded = not bool(getattr(self, "_hardware_info_expanded", False))
+
+        if hasattr(self, "hardware_details_toggle") and self.hardware_details_toggle.winfo_exists():
+            self.hardware_details_toggle.configure(
+                text="Hardware Info â–¼" if self._hardware_info_expanded else "Hardware Info â–¶"
+            )
+
+        if hasattr(self, "hardware_details_label") and self.hardware_details_label.winfo_exists():
+            if self._hardware_info_expanded:
+                self.hardware_details_label.pack(fill="x", pady=(2, 0))
+                self._update_hardware_status_ui()
+            else:
+                self.hardware_details_label.pack_forget()
+
+    def _build_hardware_details_text(self, mode: str, connected: bool) -> str:
+        auto_connect = bool(getattr(config, "auto_connect_mouse_api", False))
+        details = [
+            f"Backend: {mode}",
+            f"Connected: {'Yes' if connected else 'No'}",
+            f"Auto Connect On Startup: {'Yes' if auto_connect else 'No'}",
+        ]
+
+        mouse_backend = None
+        mouse_state = None
+        net_api_module = None
+        kmboxa_api_module = None
+        try:
+            from src.utils import mouse as mouse_backend
+            from src.utils.mouse import NetAPI as net_api_module
+            from src.utils.mouse import KmboxAAPI as kmboxa_api_module
+            from src.utils.mouse import state as mouse_state
+        except Exception:
+            pass
+
+        if mode == "Net":
+            ip = str(getattr(config, "net_ip", ""))
+            port = str(getattr(config, "net_port", ""))
+            uuid = str(getattr(config, "net_uuid", getattr(config, "net_mac", "")))
+            details.append(f"IP/Port: {ip}:{port}")
+            details.append(f"UUID: {uuid or '(empty)'}")
+            try:
+                if mouse_backend is not None:
+                    details.append(f"DLL: {mouse_backend.get_expected_kmnet_dll_name()}")
+                loaded_path = getattr(net_api_module, "_loaded_module_path", "")
+                if loaded_path:
+                    details.append(f"Loaded: {os.path.basename(loaded_path)}")
+            except Exception:
+                pass
+        elif mode == "DHZ":
+            ip = str(getattr(config, "dhz_ip", ""))
+            port = str(getattr(config, "dhz_port", ""))
+            random_shift = str(getattr(config, "dhz_random", 0))
+            details.append(f"IP/Port: {ip}:{port}")
+            details.append(f"Random Shift: {random_shift}")
+            try:
+                dhz_client = getattr(mouse_state, "dhz_client", None)
+                if dhz_client is not None and hasattr(dhz_client, "addr"):
+                    details.append(f"Active Target: {dhz_client.addr[0]}:{dhz_client.addr[1]}")
+            except Exception:
+                pass
+        elif mode == "KmboxA":
+            vid_pid = str(getattr(config, "kmboxa_vid_pid", "")).strip()
+            vid = int(getattr(config, "kmboxa_vid", 0))
+            pid = int(getattr(config, "kmboxa_pid", 0))
+            details.append(f"VID/PID Input: {vid_pid or '(empty)'}")
+            details.append(f"VID/PID Parsed: {vid}/{pid}")
+            try:
+                if mouse_backend is not None:
+                    details.append(f"DLL: {mouse_backend.get_expected_kmboxa_dll_name()}")
+                loaded_path = getattr(kmboxa_api_module, "_loaded_module_path", "")
+                if loaded_path:
+                    details.append(f"Loaded: {os.path.basename(loaded_path)}")
+            except Exception:
+                pass
+        elif mode == "MakV2":
+            cfg_port = str(getattr(config, "makv2_port", "") or "auto")
+            cfg_baud = str(getattr(config, "makv2_baud", 4000000))
+            details.append(f"Port: {cfg_port}")
+            details.append(f"Baud: {cfg_baud}")
+            try:
+                serial_dev = getattr(mouse_state, "makcu", None)
+                if serial_dev is not None:
+                    details.append(f"Active Port: {getattr(serial_dev, 'port', cfg_port)}")
+                    details.append(f"Active Baud: {getattr(serial_dev, 'baudrate', cfg_baud)}")
+            except Exception:
+                pass
+        elif mode == "Arduino":
+            cfg_port = str(getattr(config, "arduino_port", "") or "auto")
+            cfg_baud = str(getattr(config, "arduino_baud", 115200))
+            details.append(f"Port: {cfg_port}")
+            details.append(f"Baud: {cfg_baud}")
+            details.append(f"16-bit Move: {'Yes' if bool(getattr(config, 'arduino_16_bit_mouse', True)) else 'No'}")
+            try:
+                serial_dev = getattr(mouse_state, "makcu", None)
+                if serial_dev is not None:
+                    details.append(f"Active Port: {getattr(serial_dev, 'port', cfg_port)}")
+                    details.append(f"Active Baud: {getattr(serial_dev, 'baudrate', cfg_baud)}")
+            except Exception:
+                pass
+        elif mode == "SendInput":
+            details.append("Injection: Win32 SendInput")
+            details.append("Transport: Local OS API")
+        else:
+            serial_mode = str(getattr(config, "serial_port_mode", "Auto")).strip().lower()
+            serial_mode_label = "Manual" if serial_mode == "manual" else "Auto"
+            configured_port = str(getattr(config, "serial_port", "")).strip()
+            auto_switch_4m = bool(getattr(config, "serial_auto_switch_4m", False))
+            details.append(f"COM Mode: {serial_mode_label}")
+            details.append(f"Auto Switch 4M On Startup: {'Yes' if auto_switch_4m else 'No'}")
+            if serial_mode_label == "Manual":
+                details.append(f"Configured Port: {configured_port or '(empty)'}")
+            else:
+                details.append("Configured Port: auto-detect")
+            try:
+                serial_dev = getattr(mouse_state, "makcu", None)
+                if serial_dev is not None:
+                    details.append(f"Active Port: {getattr(serial_dev, 'port', 'unknown')}")
+                    details.append(f"Active Baud: {getattr(serial_dev, 'baudrate', 'unknown')}")
+            except Exception:
+                pass
+
+        try:
+            if mouse_backend is not None:
+                last_error = str(mouse_backend.get_last_connect_error() or "").strip()
+                if last_error and not connected:
+                    details.append(f"Last Error: {last_error}")
+        except Exception:
+            pass
+
+        return "\n".join(details)
+
+    def _update_hardware_status_ui(self):
+        mode = self._normalize_mouse_api_name(getattr(config, "mouse_api", "Serial"))
+        connected = False
+
+        try:
+            from src.utils import mouse as mouse_backend
+
+            connected = bool(getattr(mouse_backend, "is_connected", False))
+            if connected:
+                active_backend = mouse_backend.get_active_backend()
+                if active_backend:
+                    # å„ªå…ˆä½¿ç”¨å¯¦éš›é€£æŽ¥çš„ backendï¼Œè€Œä¸æ˜¯ config ä¸­çš„ mouse_api
+                    active_mode = self._normalize_mouse_api_name(active_backend)
+                    if active_mode:
+                        mode = active_mode
+        except Exception:
+            connected = False
+
+        if hasattr(self, "hardware_type_label") and self.hardware_type_label.winfo_exists():
+            self.hardware_type_label.configure(text=f"Hardware: {mode}")
+
+        if hasattr(self, "hardware_conn_label") and self.hardware_conn_label.winfo_exists():
+            if connected:
+                self.hardware_conn_label.configure(text="Hardware Status: Connected", text_color=COLOR_SUCCESS)
+            else:
+                self.hardware_conn_label.configure(text="Hardware Status: Disconnected", text_color=COLOR_DANGER)
+
+        if (
+            getattr(self, "_hardware_info_expanded", False)
+            and hasattr(self, "hardware_details_label")
+            and self.hardware_details_label.winfo_exists()
+        ):
+            self.hardware_details_label.configure(text=self._build_hardware_details_text(mode, connected))
+
+    def _update_connection_status_loop(self):
+        is_conn = self.capture.is_connected()
+        current_mode = self.capture.mode
+        
+        if is_conn:
+            self._set_status_indicator(f"Status: Online ({current_mode})", COLOR_TEXT)
+        else:
+            self._set_status_indicator("Status: Offline", COLOR_TEXT_DIM)
+        self._update_hardware_status_ui()
+        self.after(500, self._update_connection_status_loop)
+
+    def _update_performance_stats(self):
+        """é‡å­˜æŸŠéŽ¬Ñ†å…˜ç»²è¾«â–“æ·‡â„ƒä¼…é”›åœ˜PS éœå±½æ¬¢é–¬è¯§ç´š"""
+        try:
+            if self.capture.mode in ("UDP", "UDP v1.5") and self.capture.is_connected():
+                # å¯°?UDP receiver é›æ’å½‡éŽ¬Ñ†å…˜ç»²è¾«â–“
+                udp_manager = self.capture.get_active_udp_manager()
+                receiver = udp_manager.get_receiver() if udp_manager else None
+                if receiver:
+                    stats = receiver.get_performance_stats()
+                    
+                    # é‡å­˜æŸŠ FPS
+                    current_fps = stats.get('current_fps', 0)
+                    self.fps_label.configure(text=f"FPS: {current_fps:.1f}")
+                    
+                    # é‡å­˜æŸŠç‘™ï½‡â’“å¯¤å •ä¼ˆ
+                    decode_delay = stats.get('decode_delay_ms', 0)
+                    self.decode_delay_label.configure(text=f"Decode: {decode_delay:.1f} ms")
+                    
+                    # é‡å­˜æŸŠç»ºè—‰æ¬¢é–¬è¯§ç´™éŽºãƒ¦æ•¹ + ç‘™ï½‡â’“ + é“æ› æ‚Šé”›?
+                    receive_delay = stats.get('receive_delay_ms', 0)
+                    processing_delay = stats.get('processing_delay_ms', 0)
+                    total_delay = receive_delay + decode_delay + processing_delay
+                    self.total_delay_label.configure(text=f"Delay: {total_delay:.1f} ms")
+            elif self.capture.mode == "NDI" and self.capture.is_connected():
+                # NDI å¦¯â€³ç´¡é”›æ°¬ç·¸ tracker é›æ’å½‡ç»¨â€³æŸˆé¨?FPS æ·‡â„ƒä¼…
+                if hasattr(self.tracker, '_frame_count'):
+                    self.fps_label.configure(text=f"FPS: ~{self.tracker._target_fps}")
+                    self.decode_delay_label.configure(text="Decode: N/A")
+                    self.total_delay_label.configure(text="Delay: N/A")
+            elif self.capture.mode == "MSS" and self.capture.is_connected():
+                # MSS å¦¯â€³ç´¡é”›æ°¬ç·¸ mss_capture é›æ’å½‡éå £å…˜ç»²è¾«â–“
+                if self.capture.mss_capture:
+                    stats = self.capture.mss_capture.get_performance_stats()
+                    fps = stats.get('current_fps', 0)
+                    grab_delay = stats.get('grab_delay_ms', 0)
+                    self.fps_label.configure(text=f"FPS: {fps:.1f}")
+                    self.decode_delay_label.configure(text=f"Grab: {grab_delay:.1f} ms")
+                    self.total_delay_label.configure(text=f"Delay: {grab_delay:.1f} ms")
+                else:
+                    self.fps_label.configure(text="FPS: --")
+                    self.decode_delay_label.configure(text="Grab: -- ms")
+                    self.total_delay_label.configure(text="Delay: -- ms")
+            elif self.capture.mode == "CaptureCard" and self.capture.is_connected():
+                # CaptureCard å¦¯â€³ç´¡é”›æ°¶â€™ç»€å“„ç†€éˆ?FPS æ·‡â„ƒä¼…
+                if hasattr(self.tracker, '_frame_count'):
+                    self.fps_label.configure(text=f"FPS: ~{self.tracker._target_fps}")
+                    self.decode_delay_label.configure(text="Decode: N/A")
+                    self.total_delay_label.configure(text="Delay: N/A")
+            else:
+                # éˆîˆâ‚¬ï½†å¸´é…å‚žâ€™ç»€?--
+                self.fps_label.configure(text="FPS: --")
+                self.decode_delay_label.configure(text="Decode: -- ms")
+                self.total_delay_label.configure(text="Delay: -- ms")
+        except Exception as e:
+            log_print(f"[UI] Performance stats update error: {e}")
+        
+        # å§£?500ms é‡å­˜æŸŠæ¶“â‚¬å¨†?
+        self.after(500, self._update_performance_stats)
+
+    def _apply_sources_to_ui(self, names):
+        # Only update if we are still on NDI mode and the widget exists
+        if self.capture.mode == "NDI" and hasattr(self, 'source_option') and self.source_option.winfo_exists():
+            if names:
+                self.source_option.configure(values=names)
+                
+                # é¢æ¥„â”‚éŽ­ãˆ äº¬æ¶”å¬ªå¢ æ·‡æ¿†ç“¨é¨å‹¯ä¼•éŽ¿?
+                if self.saved_ndi_source and self.saved_ndi_source in names:
+                    self.source_option.set(self.saved_ndi_source)
+                elif self.source_option.get() not in names:
+                    self.source_option.set(names[0])
+            else:
+                self.source_option.configure(values=["(no sources)"])
+                self.source_option.set("(no sources)")
+
+    def _on_source_selected(self, val):
+        if val and val not in ["(no sources)", "(Scanning...)"]:
+            if self.capture.mode == "NDI":
+                self.capture.ndi.set_selected_source(val)
+
+    def _open_settings_window(self):
+        """éŽµæ’»æžŠç‘·î… ç–†ç‘•æ «ç¥"""
+        SettingsWindow(self)
+    
+    def _on_close(self):
+        # å¯°?tracker éšå±¾î„žéˆâ‚¬é‚æ‰®æ®‘ç‘·î… ç–†é’?configé”›å ¢â’‘æ·‡æ¿‡å¢éˆå¤äº±ç›å±¾æªªé¨å‹®ç•©é‡æ’®å…˜çšî‚¡ç¹šç€›æ©ˆç´š
+        try:
+            config.normal_x_speed = self.tracker.normal_x_speed
+            config.normal_y_speed = self.tracker.normal_y_speed
+            config.normalsmooth = self.tracker.normalsmooth
+            config.normalsmoothfov = self.tracker.normalsmoothfov
+            config.fovsize = self.tracker.fovsize
+            config.ads_fov_enabled = getattr(self.tracker, "ads_fov_enabled", getattr(config, "ads_fov_enabled", False))
+            config.ads_fovsize = getattr(self.tracker, "ads_fovsize", getattr(config, "ads_fovsize", config.fovsize))
+            config.ads_key = getattr(self.tracker, "ads_key", getattr(config, "ads_key", "Right Mouse Button"))
+            config.tbfovsize = self.tracker.tbfovsize
+            config.trigger_ads_fov_enabled = getattr(
+                self.tracker, "trigger_ads_fov_enabled", getattr(config, "trigger_ads_fov_enabled", False)
+            )
+            config.trigger_ads_fovsize = getattr(
+                self.tracker, "trigger_ads_fovsize", getattr(config, "trigger_ads_fovsize", config.tbfovsize)
+            )
+            config.trigger_ads_key = getattr(
+                self.tracker, "trigger_ads_key", getattr(config, "trigger_ads_key", "Right Mouse Button")
+            )
+            config.trigger_ads_key_type = getattr(
+                self.tracker, "trigger_ads_key_type", getattr(config, "trigger_ads_key_type", "hold")
+            )
+            config.selected_tb_btn = getattr(self.tracker, "selected_tb_btn", getattr(config, "selected_tb_btn", 3))
+            config.tbdelay_min = self.tracker.tbdelay_min
+            config.tbdelay_max = self.tracker.tbdelay_max
+            config.tbhold_min = self.tracker.tbhold_min
+            config.tbhold_max = self.tracker.tbhold_max
+            config.in_game_sens = self.tracker.in_game_sens
+            config.mouse_dpi = self.tracker.mouse_dpi
+            
+            # Sec Aimbot
+            config.normal_x_speed_sec = self.tracker.normal_x_speed_sec
+            config.normal_y_speed_sec = self.tracker.normal_y_speed_sec
+            config.normalsmooth_sec = self.tracker.normalsmooth_sec
+            config.normalsmoothfov_sec = self.tracker.normalsmoothfov_sec
+            config.fovsize_sec = self.tracker.fovsize_sec
+            config.ads_fov_enabled_sec = getattr(self.tracker, "ads_fov_enabled_sec", getattr(config, "ads_fov_enabled_sec", False))
+            config.ads_fovsize_sec = getattr(self.tracker, "ads_fovsize_sec", getattr(config, "ads_fovsize_sec", config.fovsize_sec))
+            config.ads_key_sec = getattr(self.tracker, "ads_key_sec", getattr(config, "ads_key_sec", "Right Mouse Button"))
+            config.selected_mouse_button_sec = self.tracker.selected_mouse_button_sec
+            
+        except Exception as e:
+            log_print(f"[UI] Sync before save error: {e}")
+        
+        # æ·‡æ¿†ç“¨é£è·ºå¢ é–°å¶‡ç–†
+        try:
+            config.save_to_file()
+        except Exception as e:
+            log_print(f"[UI] Failed to auto-save configuration: {e}")
+        
+        # é‹æ»„î„›æ©å€Ÿå·¥é£?
+        try: 
+            self.tracker.stop()
+        except Exception as e:
+            log_print(f"[UI] Tracker stop error: {e}")
+        
+        # å¨“å‘¯æ‚ŠéŽ¹æ› åµ…éˆå¶…å«
+        try: 
+            self.capture.cleanup()
+        except Exception as e:
+            log_print(f"[UI] Capture cleanup error: {e}")
+        
+        # é–µé”‹ç˜ˆç»æ¥€å½›
+        self.destroy()
+        
+        # é—‚æ»ˆæž†éŽµâ‚¬éˆ?OpenCV ç»æ¥€å½›
+        try: 
+            cv2.destroyAllWindows()
+        except Exception as e:
+            log_print(f"[UI] CV2 cleanup error: {e}")
+
+    # Callbacks proxies
+    def _on_normal_x_speed_changed(self, val): 
+        config.normal_x_speed = val
+        self.tracker.normal_x_speed = val
+    
+    def _on_normal_y_speed_changed(self, val): 
+        config.normal_y_speed = val
+        self.tracker.normal_y_speed = val
+    
+    def _on_silent_distance_changed(self, val):
+        config.silent_distance = val
+        self.tracker.silent_distance = val
+    
+    def _on_silent_delay_changed(self, val):
+        config.silent_delay = val
+        self.tracker.silent_delay = val
+    
+    def _on_silent_move_delay_changed(self, val):
+        config.silent_move_delay = val
+        self.tracker.silent_move_delay = val
+    
+    def _on_silent_return_delay_changed(self, val):
+        config.silent_return_delay = val
+        self.tracker.silent_return_delay = val
+    
+    def _on_config_in_game_sens_changed(self, val): 
+        config.in_game_sens = val
+        self.tracker.in_game_sens = val
+    
+    def _on_config_normal_smooth_changed(self, val): 
+        config.normalsmooth = val
+        self.tracker.normalsmooth = val
+    
+    def _on_config_normal_smoothfov_changed(self, val): 
+        config.normalsmoothfov = val
+        self.tracker.normalsmoothfov = val
+    
+    def _on_fovsize_changed(self, val): 
+        config.fovsize = val
+        self.tracker.fovsize = val
+    
+    def _on_aim_offsetX_changed(self, val):
+        config.aim_offsetX = val
+    
+    def _on_aim_offsetY_changed(self, val):
+        config.aim_offsetY = val
+    
+    def _on_aim_type_selected(self, val):
+        config.aim_type = val
+    
+    def _on_tbdelay_range_changed(self, min_val, max_val):
+        """Triggerbot Delay ç»¡å‹«æ¹‡é€ç¡…ç•©"""
+        config.tbdelay_min = min_val
+        config.tbdelay_max = max_val
+        if hasattr(self, 'tracker'):
+            self.tracker.tbdelay_min = min_val
+            self.tracker.tbdelay_max = max_val
+    
+    def _on_tbhold_range_changed(self, min_val, max_val):
+        """Triggerbot Hold ç»¡å‹«æ¹‡é€ç¡…ç•©"""
+        config.tbhold_min = min_val
+        config.tbhold_max = max_val
+        if hasattr(self, 'tracker'):
+            self.tracker.tbhold_min = min_val
+            self.tracker.tbhold_max = max_val
+
+    def _on_rgb_tbdelay_range_changed(self, min_val, max_val):
+        config.rgb_tbdelay_min = min_val
+        config.rgb_tbdelay_max = max_val
+        if hasattr(self, "tracker"):
+            self.tracker.rgb_tbdelay_min = min_val
+            self.tracker.rgb_tbdelay_max = max_val
+
+    def _on_rgb_tbhold_range_changed(self, min_val, max_val):
+        config.rgb_tbhold_min = min_val
+        config.rgb_tbhold_max = max_val
+        if hasattr(self, "tracker"):
+            self.tracker.rgb_tbhold_min = min_val
+            self.tracker.rgb_tbhold_max = max_val
+
+    def _on_rgb_tbcooldown_range_changed(self, min_val, max_val):
+        config.rgb_tbcooldown_min = min_val
+        config.rgb_tbcooldown_max = max_val
+        if hasattr(self, "tracker"):
+            self.tracker.rgb_tbcooldown_min = min_val
+            self.tracker.rgb_tbcooldown_max = max_val
+    
+
+    def _on_trigger_roi_size_changed(self, val):
+        config.trigger_roi_size = int(val)
+        if hasattr(self, "tracker"):
+            self.tracker.trigger_roi_size = int(val)
+
+    def _on_trigger_min_pixels_changed(self, val):
+        config.trigger_min_pixels = int(val)
+        if hasattr(self, "tracker"):
+            self.tracker.trigger_min_pixels = int(val)
+
+    def _on_trigger_min_ratio_changed(self, val):
+        config.trigger_min_ratio = float(val)
+        if hasattr(self, "tracker"):
+            self.tracker.trigger_min_ratio = float(val)
+
+    def _on_trigger_confirm_frames_changed(self, val):
+        config.trigger_confirm_frames = int(val)
+        if hasattr(self, "tracker"):
+            self.tracker.trigger_confirm_frames = int(val)
+
+    def _on_tbcooldown_range_changed(self, min_val, max_val):
+        """Triggerbot Cooldown ç»¡å‹«æ¹‡é€ç¡…ç•©"""
+        config.tbcooldown_min = min_val
+        config.tbcooldown_max = max_val
+        if hasattr(self, 'tracker'):
+            self.tracker.tbcooldown_min = min_val
+            self.tracker.tbcooldown_max = max_val
+    
+    def _on_tbburst_count_range_changed(self, min_val, max_val):
+        """Triggerbot Burst Count ç»¡å‹«æ¹‡é€ç¡…ç•©"""
+        config.tbburst_count_min = int(min_val)
+        config.tbburst_count_max = int(max_val)
+        if hasattr(self, 'tracker'):
+            self.tracker.tbburst_count_min = int(min_val)
+            self.tracker.tbburst_count_max = int(max_val)
+    
+    def _on_tbburst_interval_range_changed(self, min_val, max_val):
+        """Triggerbot Burst Interval ç»¡å‹«æ¹‡é€ç¡…ç•©"""
+        config.tbburst_interval_min = min_val
+        config.tbburst_interval_max = max_val
+        if hasattr(self, 'tracker'):
+            self.tracker.tbburst_interval_min = min_val
+            self.tracker.tbburst_interval_max = max_val
+    
+    def _on_tbfovsize_changed(self, val): 
+        config.tbfovsize = val
+        self.tracker.tbfovsize = val
+
+    def _on_trigger_ads_fov_enabled_changed(self):
+        config.trigger_ads_fov_enabled = self.var_trigger_ads_fov_enabled.get()
+        if hasattr(self, "tracker"):
+            self.tracker.trigger_ads_fov_enabled = config.trigger_ads_fov_enabled
+        if str(getattr(self, "_active_tab_name", "")) == "Trigger":
+            self._show_tb_tab()
+
+    def _on_trigger_ads_fovsize_changed(self, val):
+        config.trigger_ads_fovsize = val
+        if hasattr(self, "tracker"):
+            self.tracker.trigger_ads_fovsize = val
+
+    def _on_trigger_ads_key_type_selected(self, val):
+        config.trigger_ads_key_type = ADS_KEY_TYPE_DISPLAY_TO_VALUE.get(str(val), "hold")
+        if hasattr(self, "tracker"):
+            self.tracker.trigger_ads_key_type = config.trigger_ads_key_type
+        self._log_config(f"Trigger ADS Key Type: {val}")
+    
+    def _on_tbhold_changed(self, val):
+        config.tbhold = val
+        self.tracker.tbhold = val
+    
+    def _on_enableaim_changed(self): 
+        config.enableaim = self.var_enableaim.get()
+
+    def _on_ads_fov_enabled_changed(self):
+        config.ads_fov_enabled = self.var_ads_fov_enabled.get()
+        if hasattr(self, "tracker"):
+            self.tracker.ads_fov_enabled = config.ads_fov_enabled
+        if str(getattr(self, "_active_tab_name", "")) == "Main Aimbot":
+            self._show_aimbot_tab()
+
+    def _on_ads_fovsize_changed(self, val):
+        config.ads_fovsize = val
+        if hasattr(self, "tracker"):
+            self.tracker.ads_fovsize = val
+    
+    def _on_anti_smoke_changed(self):
+        """Main Aimbot Anti-Smoke é—å¬®æ£žé¥ç‚¶î€ž"""
+        config.anti_smoke_enabled = self.var_anti_smoke.get()
+        if hasattr(self.tracker, 'anti_smoke_detector'):
+            self.tracker.anti_smoke_detector.set_enabled(config.anti_smoke_enabled)
+    
+    def _on_enabletb_changed(self): 
+        config.enabletb = self.var_enabletb.get()
+    
+    def _on_enablercs_changed(self):
+        """RCS é—å¬®æ£žé€ç¡…ç•©"""
+        config.enablercs = self.var_enablercs.get()
+    
+    def _on_rcs_pull_speed_changed(self, val):
+        """RCS Pull Speed é€ç¡…ç•©"""
+        config.rcs_pull_speed = int(val)
+        if hasattr(self, 'tracker'):
+            self.tracker.rcs_pull_speed = int(val)
+    
+    def _on_rcs_activation_delay_changed(self, val):
+        """RCS Activation Delay é€ç¡…ç•©"""
+        config.rcs_activation_delay = int(val)
+        if hasattr(self, 'tracker'):
+            self.tracker.rcs_activation_delay = int(val)
+    
+    def _on_rcs_rapid_click_threshold_changed(self, val):
+        """RCS Rapid Click Threshold é€ç¡…ç•©"""
+        config.rcs_rapid_click_threshold = int(val)
+        if hasattr(self, 'tracker'):
+            self.tracker.rcs_rapid_click_threshold = int(val)
+    
+    def _on_rcs_release_y_enabled_changed(self):
+        """RCS Release Y-Axis é—å¬®æ£žé€ç¡…ç•©"""
+        config.rcs_release_y_enabled = self.var_rcs_release_y_enabled.get()
+    
+    def _on_rcs_release_y_duration_changed(self, val):
+        """RCS Release Y-Axis Duration é€ç¡…ç•©"""
+        config.rcs_release_y_duration = float(val)
+    
+    def _on_color_selected(self, val): 
+        config.color = val
+        self.tracker.color = val
+        # ç€µï¸½æªªé–²å¶†æŸŠæ“å¤Šå†å¦¯â€³ç€·æµ ãƒ¦å™³é¢ã„¦æŸŠé¨å‹¯î””é‘¹èŒ¶Åç€¹?
+        from src.utils.detection import reload_model
+        self.tracker.model, self.tracker.class_names = reload_model()
+        # é‡å­˜æŸŠ Custom HSV é—â‚¬æ¿‰å©„æ®‘é™îˆî›°éŽ¬?
+        self._update_custom_hsv_visibility()
+    
+    def _update_custom_hsv_visibility(self):
+        """Show or hide Custom HSV section based on selected color."""
+        current_color = getattr(config, "color", "yellow")
+        is_custom = current_color == "custom"
+
+        if hasattr(self, 'custom_hsv_container'):
+            if is_custom:
+                if not self.custom_hsv_container.winfo_ismapped():
+                    self.custom_hsv_container.pack(fill="x", pady=(5, 0))
+            else:
+                if self.custom_hsv_container.winfo_ismapped():
+                    self.custom_hsv_container.pack_forget()
+
+    def _on_custom_hsv_changed(self, key, val):
+        """Custom HSV éŠå…¼æ•¼ç’å©ƒæªªé¨å‹«æ´–ç‘¾?"""
+        setattr(config, key, int(val))
+        # æ¿¡å‚›ç‰é£è·ºå¢ é–¬å‘Šæ°é¨å‹¬æ§¸ customé”›å±½î‡›é…å‚žå™¸é‚æ‹Œç´šéãƒ¦Äé¨?
+        if getattr(config, "color", "yellow") == "custom":
+            from src.utils.detection import reload_model
+            if hasattr(self, 'tracker'):
+                self.tracker.model, self.tracker.class_names = reload_model()
+                log_print(f"[UI] Custom HSV updated: {key} = {int(val)}")
+    
+    def _update_custom_rgb_visibility(self):
+        """Show or hide Custom RGB section based on selected RGB profile."""
+        current_rgb_profile = str(getattr(config, "rgb_color_profile", "purple")).strip().lower()
+        is_custom = current_rgb_profile == "custom"
+
+        if hasattr(self, 'custom_rgb_container'):
+            if is_custom:
+                if not self.custom_rgb_container.winfo_ismapped():
+                    self.custom_rgb_container.pack(fill="x", pady=(5, 0))
+            else:
+                if self.custom_rgb_container.winfo_ismapped():
+                    self.custom_rgb_container.pack_forget()
+    
+    def _get_rgb_color_hex(self):
+        """Get current RGB color as hex string."""
+        r = max(0, min(255, int(getattr(config, "rgb_custom_r", 161))))
+        g = max(0, min(255, int(getattr(config, "rgb_custom_g", 69))))
+        b = max(0, min(255, int(getattr(config, "rgb_custom_b", 163))))
+        return f"#{r:02x}{g:02x}{b:02x}"
+    
+    def _update_rgb_color_preview(self):
+        """Update RGB color preview box."""
+        if hasattr(self, "rgb_color_preview"):
+            try:
+                color_hex = self._get_rgb_color_hex()
+                self.rgb_color_preview.configure(fg_color=color_hex)
+            except Exception as e:
+                log_print(f"[UI] Failed to update RGB color preview: {e}")
+    
+    def _on_rgb_custom_changed(self, key, val):
+        """Custom RGB å€¼æ”¹è®Šæ™‚çš„å›žèª¿"""
+        setattr(config, key, int(val))
+        # ç¢ºä¿å€¼åœ¨æœ‰æ•ˆç¯„åœå…§
+        setattr(config, key, max(0, min(255, int(val))))
+        if hasattr(self, "tracker"):
+            self.tracker.rgb_color_profile = config.rgb_color_profile
+        # Update color preview
+        self._update_rgb_color_preview()
+        log_print(f"[UI] Custom RGB updated: {key} = {int(val)}")
+    
+    def _open_hsv_preview(self):
+        """Abre a janela de preview HSV em tempo real."""
+        if hasattr(self, '_hsv_preview_window') and self._hsv_preview_window is not None:
+            try:
+                if self._hsv_preview_window.winfo_exists():
+                    self._hsv_preview_window.lift()
+                    self._hsv_preview_window.focus_force()
+                    return
+            except Exception:
+                pass
+
+        def _on_apply():
+            # Recarrega o modelo de detecao com os novos valores
+            if getattr(config, 'color', 'yellow') == 'custom':
+                from src.utils.detection import reload_model
+                if hasattr(self, 'tracker'):
+                    self.tracker.model, self.tracker.class_names = reload_model()
+                    log_print('[UI] Custom HSV aplicado via Preview.')
+            # Atualiza os sliders da UI principal
+            self._sync_hsv_sliders_from_config()
+
+        self._hsv_preview_window = HsvPreviewWindow(
+            self, self.capture, on_apply_callback=_on_apply
+        )
+
+    def _sync_hsv_sliders_from_config(self):
+        """Atualiza os sliders HSV da UI principal a partir do config."""
+        keys = [
+            ('custom_hsv_min_h', 0), ('custom_hsv_min_s', 0), ('custom_hsv_min_v', 0),
+            ('custom_hsv_max_h', 179), ('custom_hsv_max_s', 255), ('custom_hsv_max_v', 255),
+        ]
+        for key, default in keys:
+            val = int(getattr(config, key, default))
+            self._set_slider_value(key, val)
+
+    def _on_detection_merge_distance_changed(self, val):
+        """Detection Merge Distance é€ç¡…ç•©é…å‚œæ®‘é¥ç‚¶î€ž"""
+        config.detection_merge_distance = int(val)
+        log_print(f"[UI] Detection merge distance updated: {int(val)}")
+    
+    def _on_detection_min_contour_points_changed(self, val):
+        """Detection Min Contour Points é€ç¡…ç•©é…å‚œæ®‘é¥ç‚¶î€ž"""
+        config.detection_min_contour_points = int(val)
+        log_print(f"[UI] Detection min contour points updated: {int(val)}")
+    
+    def _on_mode_selected(self, val): 
+        config.mode = val
+        self.tracker.mode = val
+        # é–²å¶†æŸŠå¨“å‰ç…‹ Aimbot tab æµ ãƒ©â€™ç»€å“„çšªéŽ³å¤‹Äå¯®å¿•æ®‘é™å†©æš©
+        self._show_aimbot_tab()
+        # é–²å¶†æŸŠæ¥‚æ¨¹å¯’å§ï½‡â’‘é¨å‹«çš«é‘¸î…å¯œé–³?
+        self._set_nav_active("Main Aimbot")
+    
+    def _on_mode_sec_selected(self, val):
+        config.mode_sec = val
+        self.tracker.mode_sec = val
+        # é–²å¶†æŸŠå¨“å‰ç…‹ Sec Aimbot tab æµ ãƒ©â€™ç»€å“„çšªéŽ³å¤‹Äå¯®å¿•æ®‘é™å†©æš©
+        self._show_sec_aimbot_tab()
+        # é–²å¶†æŸŠæ¥‚æ¨¹å¯’å§ï½‡â’‘é¨å‹«çš«é‘¸î…å¯œé–³?
+        self._set_nav_active("Sec Aimbot")
+    
+    # Sec Aimbot Callbacks
+    def _on_normal_x_speed_sec_changed(self, val): 
+        config.normal_x_speed_sec = val
+        self.tracker.normal_x_speed_sec = val
+    
+    def _on_normal_y_speed_sec_changed(self, val): 
+        config.normal_y_speed_sec = val
+        self.tracker.normal_y_speed_sec = val
+    
+    def _on_config_normal_smooth_sec_changed(self, val): 
+        config.normalsmooth_sec = val
+        self.tracker.normalsmooth_sec = val
+    
+    def _on_config_normal_smoothfov_sec_changed(self, val): 
+        config.normalsmoothfov_sec = val
+        self.tracker.normalsmoothfov_sec = val
+    
+    def _on_fovsize_sec_changed(self, val): 
+        config.fovsize_sec = val
+        self.tracker.fovsize_sec = val
+    
+    def _on_aim_offsetX_sec_changed(self, val):
+        config.aim_offsetX_sec = val
+    
+    def _on_aim_offsetY_sec_changed(self, val):
+        config.aim_offsetY_sec = val
+    
+    def _on_aim_type_sec_selected(self, val):
+        config.aim_type_sec = val
+    
+    def _on_enableaim_sec_changed(self): 
+        config.enableaim_sec = self.var_enableaim_sec.get()
+
+    def _on_ads_fov_enabled_sec_changed(self):
+        config.ads_fov_enabled_sec = self.var_ads_fov_enabled_sec.get()
+        if hasattr(self, "tracker"):
+            self.tracker.ads_fov_enabled_sec = config.ads_fov_enabled_sec
+        if str(getattr(self, "_active_tab_name", "")) == "Sec Aimbot":
+            self._show_sec_aimbot_tab()
+
+    def _on_ads_fovsize_sec_changed(self, val):
+        config.ads_fovsize_sec = val
+        if hasattr(self, "tracker"):
+            self.tracker.ads_fovsize_sec = val
+    
+    def _on_anti_smoke_sec_changed(self):
+        """Secondary Aimbot Anti-Smoke é—å¬®æ£žé¥ç‚¶î€ž"""
+        config.anti_smoke_enabled_sec = self.var_anti_smoke_sec.get()
+        if hasattr(self.tracker, 'anti_smoke_detector_sec'):
+            self.tracker.anti_smoke_detector_sec.set_enabled(config.anti_smoke_enabled_sec)
+    
+    # === NCAF Callbacks (Main) ===
+    def _on_ncaf_near_radius_changed(self, val):
+        config.ncaf_near_radius = val
+        snap = getattr(config, "ncaf_snap_radius", val)
+        # Snap éŽ³å¤Šã‡é‚?Nearé”›æ¶œå«¢æ¶“å¶‡îƒé“å›ªåšœé•æ›žç·šæ¶“å©…î€žéç¿ ç”«éšå±¾î„ž UI
+        if snap <= val:
+            snap = min(500, val + 1)
+            config.ncaf_snap_radius = snap
+            self._set_slider_value("ncaf_snap_radius", snap)
+    
+    def _on_ncaf_snap_radius_changed(self, val):
+        config.ncaf_snap_radius = val
+        near = getattr(config, "ncaf_near_radius", val)
+        if val <= near:
+            near = max(5, val - 1)
+            config.ncaf_near_radius = near
+            self._set_slider_value("ncaf_near_radius", near)
+    
+    def _on_ncaf_alpha_changed(self, val):
+        config.ncaf_alpha = val
+    
+    def _on_ncaf_snap_boost_changed(self, val):
+        config.ncaf_snap_boost = val
+    
+    def _on_ncaf_max_step_changed(self, val):
+        config.ncaf_max_step = val
+    
+    def _on_ncaf_min_speed_multiplier_changed(self, val):
+        config.ncaf_min_speed_multiplier = val
+    
+    def _on_ncaf_max_speed_multiplier_changed(self, val):
+        config.ncaf_max_speed_multiplier = val
+    
+    def _on_ncaf_prediction_interval_changed(self, val):
+        config.ncaf_prediction_interval = val / 1000.0  # ms éˆ«?s
+    
+    # === NCAF Callbacks (Sec) ===
+    def _on_ncaf_near_radius_sec_changed(self, val):
+        config.ncaf_near_radius_sec = val
+        snap = getattr(config, "ncaf_snap_radius_sec", val)
+        if snap <= val:
+            snap = min(500, val + 1)
+            config.ncaf_snap_radius_sec = snap
+            self._set_slider_value("ncaf_snap_radius_sec", snap)
+    
+    def _on_ncaf_snap_radius_sec_changed(self, val):
+        config.ncaf_snap_radius_sec = val
+        near = getattr(config, "ncaf_near_radius_sec", val)
+        if val <= near:
+            near = max(5, val - 1)
+            config.ncaf_near_radius_sec = near
+            self._set_slider_value("ncaf_near_radius_sec", near)
+    
+    def _on_ncaf_alpha_sec_changed(self, val):
+        config.ncaf_alpha_sec = val
+    
+    def _on_ncaf_snap_boost_sec_changed(self, val):
+        config.ncaf_snap_boost_sec = val
+    
+    def _on_ncaf_max_step_sec_changed(self, val):
+        config.ncaf_max_step_sec = val
+    
+    def _on_ncaf_min_speed_multiplier_sec_changed(self, val):
+        config.ncaf_min_speed_multiplier_sec = val
+    
+    def _on_ncaf_max_speed_multiplier_sec_changed(self, val):
+        config.ncaf_max_speed_multiplier_sec = val
+    
+    def _on_ncaf_prediction_interval_sec_changed(self, val):
+        config.ncaf_prediction_interval_sec = val / 1000.0  # ms éˆ«?s
+    
+    # === WindMouse Callbacks (Main) ===
+    def _on_wm_gravity_changed(self, val):
+        config.wm_gravity = val
+    
+    def _on_wm_wind_changed(self, val):
+        config.wm_wind = val
+    
+    def _on_wm_max_step_changed(self, val):
+        config.wm_max_step = val
+    
+    def _on_wm_min_step_changed(self, val):
+        config.wm_min_step = val
+    
+    def _on_wm_min_delay_changed(self, val):
+        config.wm_min_delay = val / 1000.0  # ms éˆ«?s
+    
+    def _on_wm_max_delay_changed(self, val):
+        config.wm_max_delay = val / 1000.0  # ms éˆ«?s
+    
+    def _on_wm_distance_threshold_changed(self, val):
+        config.wm_distance_threshold = val
+    
+    # === WindMouse Callbacks (Sec) ===
+    def _on_wm_gravity_sec_changed(self, val):
+        config.wm_gravity_sec = val
+    
+    def _on_wm_wind_sec_changed(self, val):
+        config.wm_wind_sec = val
+    
+    def _on_wm_max_step_sec_changed(self, val):
+        config.wm_max_step_sec = val
+    
+    def _on_wm_min_step_sec_changed(self, val):
+        config.wm_min_step_sec = val
+    
+    def _on_wm_min_delay_sec_changed(self, val):
+        config.wm_min_delay_sec = val / 1000.0  # ms éˆ«?s
+    
+    def _on_wm_max_delay_sec_changed(self, val):
+        config.wm_max_delay_sec = val / 1000.0  # ms éˆ«?s
+    
+    def _on_wm_distance_threshold_sec_changed(self, val):
+        config.wm_distance_threshold_sec = val
+    
+    # --- Bezier Callbacks (Main) ---
+    def _on_bezier_segments_changed(self, val):
+        config.bezier_segments = int(val)
+    
+    def _on_bezier_ctrl_x_changed(self, val):
+        config.bezier_ctrl_x = float(val)
+    
+    def _on_bezier_ctrl_y_changed(self, val):
+        config.bezier_ctrl_y = float(val)
+    
+    def _on_bezier_speed_changed(self, val):
+        config.bezier_speed = float(val)
+    
+    def _on_bezier_delay_changed(self, val):
+        config.bezier_delay = float(val) / 1000.0  # ms éˆ«?s
+    
+    # --- Bezier Callbacks (Sec) ---
+    def _on_bezier_segments_sec_changed(self, val):
+        config.bezier_segments_sec = int(val)
+    
+    def _on_bezier_ctrl_x_sec_changed(self, val):
+        config.bezier_ctrl_x_sec = float(val)
+    
+    def _on_bezier_ctrl_y_sec_changed(self, val):
+        config.bezier_ctrl_y_sec = float(val)
+    
+    def _on_bezier_speed_sec_changed(self, val):
+        config.bezier_speed_sec = float(val)
+    
+    def _on_bezier_delay_sec_changed(self, val):
+        config.bezier_delay_sec = float(val) / 1000.0  # ms éˆ«?s
+    
+    def _on_aimbot_button_selected(self, val):
+        for k, name in BUTTONS.items():
+            if name == val:
+                config.selected_mouse_button = k
+                if hasattr(self, "tracker"):
+                    self.tracker.selected_mouse_button = k
+                self._log_config(f"Aim Key: {val}")
+                break
+
+    def _on_ads_key_selected(self, val):
+        config.ads_key = self._ads_display_to_binding(val)
+        if hasattr(self, "tracker"):
+            self.tracker.ads_key = config.ads_key
+        self._log_config(f"ADS Key: {val}")
+
+    def _on_ads_key_type_selected(self, val):
+        config.ads_key_type = ADS_KEY_TYPE_DISPLAY_TO_VALUE.get(str(val), "hold")
+        self._log_config(f"ADS Key Type: {val}")
+    
+    def _on_aimbot_activation_type_selected(self, val):
+        activation_type_map = {
+            "Hold to Enable": "hold_enable",
+            "Hold to Disable": "hold_disable",
+            "Toggle": "toggle",
+            "Press to Enable": "use_enable"
+        }
+        config.aimbot_activation_type = activation_type_map.get(val, "hold_enable")
+        self._log_config(f"Aim Activation Type: {val}")
+
+    def _on_trigger_type_selected(self, val):
+        trigger_type_map = {
+            "Classic Trigger": "current",
+            "Current": "current",
+            "RGB Trigger": "rgb",
+        }
+        new_trigger_type = trigger_type_map.get(val, "current")
+        old_trigger_type = str(getattr(config, "trigger_type", "current")).strip().lower()
+        config.trigger_type = new_trigger_type
+        self._log_config(f"Trigger Type: {val}")
+        # Rebuild tab to show mode-specific controls immediately.
+        if new_trigger_type != old_trigger_type:
+            self._show_tb_tab()
+
+    def _on_rgb_color_profile_selected(self, val):
+        rgb_profile_map = {
+            "Red": "red",
+            "Yellow": "yellow",
+            "Purple": "purple",
+            "Same as HSV": "same_as_hsv",
+            "Custom": "custom",
+        }
+        config.rgb_color_profile = rgb_profile_map.get(val, "purple")
+        # Reuse the same global custom HSV profile used by main color selection.
+        if config.rgb_color_profile == "custom":
+            config.color = "custom"
+            if hasattr(self, "tracker"):
+                self.tracker.color = "custom"
+        if hasattr(self, "tracker"):
+            self.tracker.rgb_color_profile = config.rgb_color_profile
+        self._log_config(f"RGB Preset: {val}")
+        # Update Custom RGB section visibility
+        self._update_custom_rgb_visibility()
+
+    def _on_tb_button_selected(self, val):
+        for k, name in BUTTONS.items():
+            if name == val:
+                config.selected_tb_btn = k
+                self._log_config(f"Trigger Key: {val}")
+                break
+
+    def _on_trigger_activation_type_selected(self, val):
+        trigger_activation_map = {
+            "Hold to Enable": "hold_enable",
+            "Hold to Disable": "hold_disable",
+            "Toggle": "toggle",
+            # backward compatibility for older saved labels
+            "æŒ‰ä¸‹å•Ÿç”¨": "hold_enable",
+            "æŒ‰ä¸‹ç¦ç”¨": "hold_disable",
+            "åˆ‡æ›": "toggle",
+        }
+        config.trigger_activation_type = trigger_activation_map.get(val, "hold_enable")
+        self._log_config(f"Trigger Mode: {val}")
+
+    def _on_trigger_strafe_mode_selected(self, val):
+        trigger_strafe_mode_map = {
+            "Off": "off",
+            "Auto Strafe": "auto",
+            "Manual Wait": "manual_wait",
+        }
+        selected_mode = trigger_strafe_mode_map.get(str(val), "off")
+        if selected_mode != "off" and not self._supports_trigger_strafe_ui():
+            selected_mode = "off"
+        old_mode = str(getattr(config, "trigger_strafe_mode", "off")).strip().lower()
+        config.trigger_strafe_mode = selected_mode
+        self._log_config(f"Trigger Strafe Mode: {val}")
+        if selected_mode != old_mode and str(getattr(self, "_active_tab_name", "")) == "Trigger":
+            self._show_tb_tab()
+
+    def _on_trigger_strafe_auto_lead_ms_changed(self, val):
+        config.trigger_strafe_auto_lead_ms = int(val)
+
+    def _on_trigger_strafe_manual_neutral_ms_changed(self, val):
+        config.trigger_strafe_manual_neutral_ms = int(val)
+    
+    # Mouse Input Debug Callbacks
+    def _on_debug_mouse_input_changed(self):
+        """å©Šæˆ¦ç´¶æ“ç¨¿å†ç‘¾èƒ¯â”‚é—å¬®æ£žé€ç¡…ç•©"""
+        enabled = self.debug_mouse_input_var.get()
+        if enabled:
+            self.mouse_input_monitor.enable()
+            # Show debug area
+            if hasattr(self, 'debug_mouse_frame'):
+                try:
+                    self.debug_mouse_frame.pack(fill="x", pady=10)
+                except Exception:
+                    pass
+        else:
+            self.mouse_input_monitor.disable()
+            # Hide debug area
+            if hasattr(self, 'debug_mouse_frame'):
+                try:
+                    self.debug_mouse_frame.pack_forget()
+                except Exception:
+                    pass
+    
+    def _update_mouse_input_debug(self):
+        """ç€¹æ°­æ¹¡é‡å­˜æŸŠå©Šæˆ¦ç´¶æ“ç¨¿å†ç‘¾èƒ¯â”‚æ¤¤îˆœãš"""
+        # Only update if we're on the Debug tab and the switch is enabled
+        try:
+            if hasattr(self, 'debug_mouse_input_var') and self.debug_mouse_input_var.get():
+                if hasattr(self, 'debug_button_widgets') and self.debug_button_widgets:
+                    # Update monitor
+                    self.mouse_input_monitor.update()
+                    
+                    # Update UI display
+                    for idx, widgets in self.debug_button_widgets.items():
+                        try:
+                            state = self.mouse_input_monitor.get_button_state(idx)
+                            count = self.mouse_input_monitor.get_button_count(idx)
+                            
+                            # Update status indicator color (green=pressed, red=not pressed)
+                            color = COLOR_SUCCESS if state else COLOR_DANGER
+                            widgets["state_indicator"].configure(text_color=color)
+                            
+                            # Update count
+                            widgets["count_label"].configure(text=f"Count: {count}")
+                        except Exception:
+                            # Widget might be destroyed, skip this update
+                            pass
+        except Exception:
+            # Tab might have been switched, ignore
+            pass
+        
+        # Continue periodic update (every 50ms)
+        self.after(50, self._update_mouse_input_debug)
+    
+    def _reset_button_count(self, button_idx: int):
+        """é–²å¶‡ç–†é î†¼â‚¬å¬«å¯œé–³æ› æ®‘ç‘·å Ÿæš©"""
+        if hasattr(self.mouse_input_monitor, 'button_counts'):
+            self.mouse_input_monitor.button_counts[button_idx] = 0
+        if hasattr(self, 'debug_button_widgets') and button_idx in self.debug_button_widgets:
+            try:
+                self.debug_button_widgets[button_idx]["count_label"].configure(text="Count: 0")
+            except Exception:
+                pass
+    
+    def _reset_all_button_counts(self):
+        """é–²å¶‡ç–†éŽµâ‚¬éˆå¤‹å¯œé–³æ› æ®‘ç‘·å Ÿæš©"""
+        self.mouse_input_monitor.reset_counts()
+        if hasattr(self, 'debug_button_widgets'):
+            for idx, widgets in self.debug_button_widgets.items():
+                try:
+                    widgets["count_label"].configure(text="Count: 0")
+                except Exception:
+                    pass
+    
+    def _update_debug_log(self):
+        """ç€¹æ°­æ¹¡é‡å­˜æŸŠ Debug éƒãƒ¨ç™æ¤¤îˆœãš"""
+        try:
+            if hasattr(self, 'debug_log_textbox'):
+                try:
+                    # Get recent logs (up to 500)
+                    logs = get_recent_logs(500)
+                    log_count = get_log_count()
+                    
+                    # Update log count
+                    if hasattr(self, 'debug_log_count_label'):
+                        try:
+                            self.debug_log_count_label.configure(text=f"Log Count: {log_count}")
+                        except Exception:
+                            pass
+                    
+                    # Format log text
+                    import datetime
+                    log_text = ""
+                    for log in logs:
+                        timestamp = datetime.datetime.fromtimestamp(log["timestamp"]).strftime("%H:%M:%S.%f")[:-3]
+                        log_type = log["type"]
+                        source = log.get("source", "Unknown")
+                        
+                        if log_type == "MOVE":
+                            dx = log.get("dx", 0)
+                            dy = log.get("dy", 0)
+                            log_text += f"[{timestamp}] {log_type:8s} [{source:15s}] dx={dx:8.2f}, dy={dy:8.2f}\n"
+                        else:
+                            message = str(log.get("message", ""))
+                            if message:
+                                log_text += f"[{timestamp}] {log_type:8s} [{source:15s}] {message}\n"
+                            else:
+                                log_text += f"[{timestamp}] {log_type:8s} [{source:15s}]\n"
+                    
+                    # Update text box (only when content changes to avoid frequent refresh)
+                    try:
+                        current_text = self.debug_log_textbox.get("1.0", "end-1c")
+                        if current_text != log_text:
+                            self.debug_log_textbox.delete("1.0", "end")
+                            self.debug_log_textbox.insert("1.0", log_text)
+                            # Auto scroll to bottom
+                            self.debug_log_textbox.see("end")
+                    except Exception:
+                        # Widget might be destroyed
+                        pass
+                except Exception as e:
+                    # Ignore errors during tab switch
+                    pass
+        except Exception:
+            # Tab might have been switched
+            pass
+        
+        # Continue periodic update (every 100ms)
+        self.after(100, self._update_debug_log)
+    
+    def _clear_debug_log(self):
+        """å¨“å‘¯â”– Debug éƒãƒ¨ç™"""
+        clear_logs()
+        if hasattr(self, 'debug_log_textbox'):
+            try:
+                self.debug_log_textbox.delete("1.0", "end")
+            except Exception:
+                pass
+        if hasattr(self, 'debug_log_count_label'):
+            try:
+                self.debug_log_count_label.configure(text="Log Count: 0")
+            except Exception:
+                pass
+    
+    def _on_aimbot_button_sec_selected(self, val):
+        for k, name in BUTTONS.items():
+            if name == val:
+                config.selected_mouse_button_sec = k
+                self.tracker.selected_mouse_button_sec = k
+                break
+
+    def _on_ads_key_sec_selected(self, val):
+        config.ads_key_sec = self._ads_display_to_binding(val)
+        if hasattr(self, "tracker"):
+            self.tracker.ads_key_sec = config.ads_key_sec
+        self._log_config(f"Sec ADS Key: {val}")
+
+    def _on_ads_key_type_sec_selected(self, val):
+        config.ads_key_type_sec = ADS_KEY_TYPE_DISPLAY_TO_VALUE.get(str(val), "hold")
+        self._log_config(f"Sec ADS Key Type: {val}")
+    
+    def _on_aimbot_activation_type_sec_selected(self, val):
+        activation_type_map = {
+            "Hold to Enable": "hold_enable",
+            "Hold to Disable": "hold_disable",
+            "Toggle": "toggle",
+            "Press to Enable": "use_enable"
+        }
+        config.aimbot_activation_type_sec = activation_type_map.get(val, "hold_enable")
+        self._log_config(f"Sec Aim Activation Type: {val}")
+    
+    def _on_button_mask_enabled_changed(self):
+        """Button Mask ç»ºä»‹æžŠé—‚æ»ƒæ´–ç‘¾?"""
+        config.button_mask_enabled = self.var_button_mask_enabled.get()
+    
+    def _on_button_mask_changed(self, key, var):
+        """é î†¼â‚¬å¬«å¯œé–³?Mask é™â‚¬éŽ±å¬«æ•¼ç’å©‚æ´–ç‘¾?"""
+        value = var.get()
+        setattr(config, key, value)
+        button_names = {
+            "mask_left_button": "Left (L)",
+            "mask_right_button": "Right (R)",
+            "mask_middle_button": "Middle (M)",
+            "mask_side4_button": "Side 4 (S4)",
+            "mask_side5_button": "Side 5 (S5)"
+        }
+    
+    def _on_mouse_lock_main_x_changed(self):
+        """Mouse Lock Main Aimbot X-Axis é—å¬®æ£žé¥ç‚¶î€ž"""
+        try:
+            config.mouse_lock_main_x = self.var_mouse_lock_main_x.get()
+            # æ¶“å¶…æ¹ªå§ã‚ˆæª¿ç‘¾è·¨æ•¤ tické”›å²ƒç•µæ¶“è¯²æƒŠé æ‹Œæª¿éžå—­ç´é–¬åž®åŽ¤é—ƒè¯²î”£ UI ç»¶æ°±â–¼
+        except Exception as e:
+            log_print(f"[Mouse Lock] Error in main_x callback: {e}")
+    
+    def _on_mouse_lock_main_y_changed(self):
+        """Mouse Lock Main Aimbot Y-Axis é—å¬®æ£žé¥ç‚¶î€ž"""
+        try:
+            config.mouse_lock_main_y = self.var_mouse_lock_main_y.get()
+            # æ¶“å¶…æ¹ªå§ã‚ˆæª¿ç‘¾è·¨æ•¤ tické”›å²ƒç•µæ¶“è¯²æƒŠé æ‹Œæª¿éžå—­ç´é–¬åž®åŽ¤é—ƒè¯²î”£ UI ç»¶æ°±â–¼
+        except Exception as e:
+            log_print(f"[Mouse Lock] Error in main_y callback: {e}")
+    
+    def _on_mouse_lock_sec_x_changed(self):
+        """Mouse Lock Sec Aimbot X-Axis é—å¬®æ£žé¥ç‚¶î€ž"""
+        try:
+            config.mouse_lock_sec_x = self.var_mouse_lock_sec_x.get()
+            # æ¶“å¶…æ¹ªå§ã‚ˆæª¿ç‘¾è·¨æ•¤ tické”›å²ƒç•µæ¶“è¯²æƒŠé æ‹Œæª¿éžå—­ç´é–¬åž®åŽ¤é—ƒè¯²î”£ UI ç»¶æ°±â–¼
+        except Exception as e:
+            log_print(f"[Mouse Lock] Error in sec_x callback: {e}")
+    
+    def _on_mouse_lock_sec_y_changed(self):
+        """Mouse Lock Sec Aimbot Y-Axis é—å¬®æ£žé¥ç‚¶î€ž"""
+        try:
+            config.mouse_lock_sec_y = self.var_mouse_lock_sec_y.get()
+            # æ¶“å¶…æ¹ªå§ã‚ˆæª¿ç‘¾è·¨æ•¤ tické”›å²ƒç•µæ¶“è¯²æƒŠé æ‹Œæª¿éžå—­ç´é–¬åž®åŽ¤é—ƒè¯²î”£ UI ç»¶æ°±â–¼
+        except Exception as e:
+            log_print(f"[Mouse Lock] Error in sec_y callback: {e}")
+    
+    def _check_for_updates(self):
+        """Check for updates in background"""
+        if self._update_check_in_progress:
+            return
+        self._update_check_in_progress = True
+        threading.Thread(target=self._check_for_updates_worker, daemon=True).start()
+
+    def _check_for_updates_worker(self):
+        try:
+            has_update, latest_version, update_info = self.update_checker.check_update()
+            if has_update:
+                self.after(0, lambda: self._show_update_dialog(latest_version, update_info))
+        except Exception as e:
+            log_print(f"[Update] Failed to check for updates: {e}")
+        finally:
+            self._update_check_in_progress = False
+    
+    def _show_update_dialog(self, latest_version, update_info):
+        """Show update dialog with update information"""
+        UpdateDialog(self, latest_version, update_info)
+
+
+class UpdateDialog(ctk.CTkToplevel):
+    """Simple update prompt dialog."""
+
+    def __init__(self, parent, latest_version, update_info):
+        super().__init__(parent)
+        self.parent = parent
+        self.latest_version = str(latest_version or "unknown")
+        self.update_info = update_info if isinstance(update_info, dict) else {}
+
+        self.title("Update Available")
+        self.geometry("580x380")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        self.update_idletasks()
+        x = parent.winfo_x() + max(0, (parent.winfo_width() - 580) // 2)
+        y = parent.winfo_y() + max(0, (parent.winfo_height() - 380) // 2)
+        self.geometry(f"+{x}+{y}")
+
+        self._build_ui()
+
+    def _pick_text(self):
+        for key in ("notes", "changelog", "description", "message"):
+            value = self.update_info.get(key)
+            if isinstance(value, str) and value.strip():
+                return self._format_text(value.strip())
+        return "A new version is available."
+    
+    def _format_text(self, text: str) -> str:
+        """Format update text with proper line breaks and spacing."""
+        if not text:
+            return text
+        
+        # Split by lines first
+        lines = text.split('\n')
+        formatted_lines = []
+        prev_was_version_header = False
+        
+        for i, line in enumerate(lines):
+            original_line = line
+            line = line.strip()
+            
+            if not line:
+                # Preserve intentional empty lines, but skip if previous was already empty
+                if formatted_lines and formatted_lines[-1]:
+                    formatted_lines.append('')
+                continue
+            
+            # Check if this line is a version header
+            # Patterns: **Version X.X.X:**, Version X.X.X:, **vX.X.X:**, etc.
+            is_version_header = (
+                ('**Version' in line and ':**' in line) or
+                (line.startswith('Version') and ':' in line and any(c.isdigit() for c in line)) or
+                ('**v' in line and ':**' in line) or
+                (line.startswith('v') and ':' in line and any(c.isdigit() for c in line))
+            )
+            
+            # Add spacing before version headers (except the first one)
+            if is_version_header:
+                if formatted_lines and formatted_lines[-1] and not prev_was_version_header:
+                    formatted_lines.append('')  # Add empty line before version header
+                prev_was_version_header = True
+            else:
+                prev_was_version_header = False
+            
+            # Remove markdown bold markers for cleaner display
+            formatted_line = line.replace('**', '')
+            
+            formatted_lines.append(formatted_line)
+        
+        # Join with newlines
+        result = '\n'.join(formatted_lines)
+        
+        # Clean up excessive empty lines (max 2 consecutive empty lines)
+        while '\n\n\n' in result:
+            result = result.replace('\n\n\n', '\n\n')
+        
+        return result.strip()
+
+    def _pick_url(self):
+        for key in ("download_url", "release_url", "url"):
+            value = self.update_info.get(key)
+            if isinstance(value, str) and value.startswith(("http://", "https://")):
+                return value
+        return None
+
+    def _build_ui(self):
+        frame = ctk.CTkFrame(self, fg_color=COLOR_BG, corner_radius=0)
+        frame.pack(fill="both", expand=True)
+
+        ctk.CTkLabel(
+            frame,
+            text=f"New Version: v{self.latest_version}",
+            font=("Roboto", 16, "bold"),
+            text_color=COLOR_TEXT,
+        ).pack(anchor="w", padx=20, pady=(18, 8))
+
+        notes_box = ctk.CTkTextbox(
+            frame,
+            fg_color=COLOR_SURFACE,
+            text_color=COLOR_TEXT,
+            border_width=0,
+            corner_radius=8,
+            height=220,
+            wrap="word",  # Enable word wrapping
+        )
+        notes_box.pack(fill="both", expand=True, padx=20, pady=(0, 12))
+        
+        # Insert formatted text with proper spacing
+        formatted_text = self._pick_text()
+        notes_box.insert("1.0", formatted_text)
+        notes_box.configure(state="disabled")
+
+        btn_row = ctk.CTkFrame(frame, fg_color="transparent")
+        btn_row.pack(fill="x", padx=20, pady=(0, 18))
+
+        ctk.CTkButton(
+            btn_row,
+            text="Later",
+            command=self.destroy,
+            fg_color="transparent",
+            border_width=1,
+            border_color=COLOR_BORDER,
+            hover_color=COLOR_SURFACE,
+            text_color=COLOR_TEXT_DIM,
+            width=90,
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            btn_row,
+            text="Skip This",
+            command=self._on_skip,
+            fg_color="transparent",
+            border_width=1,
+            border_color=COLOR_BORDER,
+            hover_color=COLOR_SURFACE,
+            text_color=COLOR_TEXT_DIM,
+            width=100,
+        ).pack(side="left", padx=(10, 0))
+
+        ctk.CTkButton(
+            btn_row,
+            text="Never Check",
+            command=self._on_never,
+            fg_color="transparent",
+            border_width=1,
+            border_color=COLOR_BORDER,
+            hover_color=COLOR_SURFACE,
+            text_color=COLOR_DANGER,
+            width=110,
+        ).pack(side="left", padx=(10, 0))
+
+        url = self._pick_url()
+        if url:
+            # Primary action button - Download Update
+            ctk.CTkButton(
+                btn_row,
+                text="Download Update",
+                command=lambda: self._open_url(url),
+                fg_color=COLOR_ACCENT,
+                hover_color=COLOR_ACCENT_HOVER,
+                text_color=COLOR_BG,
+                width=140,
+            ).pack(side="right")
+            
+            # Secondary action button - Open Release Page
+            ctk.CTkButton(
+                btn_row,
+                text="Open Release",
+                command=lambda: self._open_url(url),
+                fg_color="transparent",
+                border_width=1,
+                border_color=COLOR_BORDER,
+                hover_color=COLOR_SURFACE,
+                text_color=COLOR_TEXT,
+                width=120,
+            ).pack(side="right", padx=(10, 0))
+
+    def _on_skip(self):
+        try:
+            self.parent.update_checker.skip_update()
+        except Exception:
+            pass
+        self.destroy()
+
+    def _on_never(self):
+        try:
+            self.parent.update_checker.set_never_update(True)
+        except Exception:
+            pass
+        self.destroy()
+
+    def _open_url(self, url: str):
+        try:
+            webbrowser.open(url, new=2)
+        except Exception:
+            pass
+
+
+class SettingsWindow(ctk.CTkToplevel):
+    """OpenCV æ¤¤îˆœãšç‘·î… ç–†ç‘•æ «ç¥"""
+    
+    def __init__(self, parent):
+        super().__init__(parent)
+        
+        self.parent = parent
+        self.title("display settings")
+        self.geometry("400x600")
+        self.resizable(False, False)
+        
+        # ç¼ƒî†»è…‘æ¤¤îˆœãš
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() - 400) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - 500) // 2
+        self.geometry(f"+{x}+{y}")
+        
+        # ç‘·î… ç–†éçƒ˜ÄéŽ±å¬­î›»ç»?
+        self.transient(parent)
+        self.grab_set()
+        
+        # é—‚æ»ˆæž†ç‘•æ «ç¥é…å‚åšœé•æ›šç¹šç€›æ¨¿Åç¼ƒ?
+        self.protocol("WM_DELETE_WINDOW", self._on_save)
+        
+        # é‘·ã„¦æªªéŽæ’ç“¨ç‘·î… ç–†é”›å ¢æ•¤é‚ç…Žå½‡å¨‘å ¬ç´š
+        self.temp_settings = {
+            "show_opencv_windows": getattr(config, "show_opencv_windows", True),
+            "show_opencv_mask": getattr(config, "show_opencv_mask", True),
+            "show_opencv_detection": getattr(config, "show_opencv_detection", True),
+            "show_opencv_roi": getattr(config, "show_opencv_roi", True),
+            "show_opencv_triggerbot_mask": getattr(config, "show_opencv_triggerbot_mask", True),
+            "show_ndi_raw_stream_window": getattr(config, "show_ndi_raw_stream_window", False),
+            "show_udp_raw_stream_window": getattr(config, "show_udp_raw_stream_window", False),
+            "show_mode_text": getattr(config, "show_mode_text", True),
+            "show_aimbot_status": getattr(config, "show_aimbot_status", True),
+            "show_triggerbot_status": getattr(config, "show_triggerbot_status", True),
+            "show_target_count": getattr(config, "show_target_count", True),
+            "show_crosshair": getattr(config, "show_crosshair", True),
+            "show_distance_text": getattr(config, "show_distance_text", True)
+        }
+        
+        self._build_ui()
+    
+    def _build_ui(self):
+        """å¦²å¬ªç¼“ UI"""
+        # æ¶“è¯²î†é£?- æµ£è·¨æ•¤å¨£è¾«å£Šé‘³å±¾æ«™é”›å±½ï½žå©ŠæŒŽæš£éŠå¬­î›»ç»?
+        main_frame = ctk.CTkFrame(self, fg_color=COLOR_BG, corner_radius=0)
+        main_frame.pack(fill="both", expand=True, padx=0, pady=0)
+        
+        # éÑ‡å„´ç€¹ç‘°æ«’ (é¢ã„¦æŸ¤éÑƒî†é–­å©…çª›)
+        content_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        content_frame.pack(fill="both", expand=True, padx=25, pady=25)
+        
+        # å¦¯æ¬“î”‘
+        title_label = ctk.CTkLabel(
+            content_frame,
+            text="DISPLAY SETTINGS",
+            font=("Roboto", 16, "bold"),
+            text_color=COLOR_TEXT
+        )
+        title_label.pack(pady=(0, 20), anchor="w")
+        
+        # é’å—™ç¥«1: éã„¥çœ¬æ¤¤îˆœãšç‘·î… ç–†
+        self._add_section_title(content_frame, "VISUAL SETTINGS")
+        
+        # OpenCV ç‘•æ «ç¥ç»ºä»‹æžŠé—‚?(Switch)
+        self.show_opencv_var = tk.BooleanVar(value=self.temp_settings["show_opencv_windows"])
+        self._add_switch(content_frame, "Show OpenCV Windows", self.show_opencv_var)
+
+        # é’å—›æ®§
+        self._add_spacer(content_frame)
+        
+        # é’å—™ç¥«1.5: OpenCV ç‘•æ «ç¥ç‘­å´‡çª—ç‘·î… ç–†
+        self._add_section_title(content_frame, "OPENCV WINDOWS")
+        
+        # æµ£è·¨æ•¤ Grid æµ£å çœ¬æ¸šå—˜å¸“é’?OpenCV ç‘•æ «ç¥é—å¬®æ£ž
+        opencv_grid_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+        opencv_grid_frame.pack(fill="x", pady=5)
+        opencv_grid_frame.grid_columnconfigure(0, weight=1)
+        opencv_grid_frame.grid_columnconfigure(1, weight=1)
+        
+        # éšå‹¯çˆ¡ OpenCV ç‘•æ «ç¥é—å¬®æ£ž
+        self.show_opencv_mask_var = tk.BooleanVar(value=self.temp_settings["show_opencv_mask"])
+        self._add_grid_switch(opencv_grid_frame, "MASK", self.show_opencv_mask_var, 0, 0)
+        
+        self.show_opencv_detection_var = tk.BooleanVar(value=self.temp_settings["show_opencv_detection"])
+        self._add_grid_switch(opencv_grid_frame, "Detection", self.show_opencv_detection_var, 0, 1)
+        
+        self.show_opencv_roi_var = tk.BooleanVar(value=self.temp_settings["show_opencv_roi"])
+        self._add_grid_switch(opencv_grid_frame, "ROI", self.show_opencv_roi_var, 1, 0)
+        
+        self.show_opencv_triggerbot_mask_var = tk.BooleanVar(value=self.temp_settings["show_opencv_triggerbot_mask"])
+        self._add_grid_switch(opencv_grid_frame, "Triggerbot Mask", self.show_opencv_triggerbot_mask_var, 1, 1)
+
+        self.show_ndi_raw_stream_var = tk.BooleanVar(value=self.temp_settings["show_ndi_raw_stream_window"])
+        self._add_grid_switch(opencv_grid_frame, "NDI Raw Stream", self.show_ndi_raw_stream_var, 2, 0)
+
+        self.show_udp_raw_stream_var = tk.BooleanVar(value=self.temp_settings["show_udp_raw_stream_window"])
+        self._add_grid_switch(opencv_grid_frame, "UDP Raw Stream", self.show_udp_raw_stream_var, 2, 1)
+
+        # é’å—›æ®§
+        self._add_spacer(content_frame)
+        
+        # é’å—™ç¥«2: é‚å›§ç“§ç’©å›ªâ–• (Overlay Elements)
+        self._add_section_title(content_frame, "OVERLAY ELEMENTS")
+        
+        # æµ£è·¨æ•¤ Grid æµ£å çœ¬æ¸šå—˜å¸“é’æ¥…æžŠé—‚æ»ç´æµ£åž®å¾é‡å­˜æš£æ¦»?
+        grid_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+        grid_frame.pack(fill="x", pady=5)
+        grid_frame.grid_columnconfigure(0, weight=1)
+        grid_frame.grid_columnconfigure(1, weight=1)
+
+        # éšå‹¯çˆ¡é—å¬®æ£ž (Switch instead of Checkbox for better look)
+        self.show_mode_var = tk.BooleanVar(value=self.temp_settings["show_mode_text"])
+        self._add_grid_switch(grid_frame, "Mode Info", self.show_mode_var, 0, 0)
+        
+        self.show_aimbot_status_var = tk.BooleanVar(value=self.temp_settings["show_aimbot_status"])
+        self._add_grid_switch(grid_frame, "Aim Status", self.show_aimbot_status_var, 0, 1)
+        
+        self.show_triggerbot_status_var = tk.BooleanVar(value=self.temp_settings["show_triggerbot_status"])
+        self._add_grid_switch(grid_frame, "Trigger Status", self.show_triggerbot_status_var, 1, 0)
+        
+        self.show_target_count_var = tk.BooleanVar(value=self.temp_settings["show_target_count"])
+        self._add_grid_switch(grid_frame, "Target Count", self.show_target_count_var, 1, 1)
+        
+        self.show_crosshair_var = tk.BooleanVar(value=self.temp_settings["show_crosshair"])
+        self._add_grid_switch(grid_frame, "Crosshair", self.show_crosshair_var, 2, 0)
+        
+        self.show_distance_var = tk.BooleanVar(value=self.temp_settings["show_distance_text"])
+        self._add_grid_switch(grid_frame, "Distance Text", self.show_distance_var, 2, 1)
+        
+        # æ´æ›¢å„´éŽ¸å¤åž¥é—â‚¬é©?
+        # æµ£è·¨æ•¤ Spacer éŽºã„¥åŸŒæ´æ›¢å„´
+        ctk.CTkFrame(content_frame, fg_color="transparent").pack(fill="both", expand=True)
+        
+        # é’å—›æ®§ç»¶?
+        ctk.CTkFrame(content_frame, height=1, fg_color=COLOR_BORDER).pack(fill="x", pady=(0, 15))
+        
+        # éŽ¸å¤åž¥ç€¹ç‘°æ«’
+        button_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+        button_frame.pack(fill="x", pady=(0, 5))
+        
+        # é™æ ¨ç§·éŽ¸å¤åž¥ (Outlined)
+        cancel_btn = ctk.CTkButton(
+            button_frame,
+            text="CANCEL",
+            command=self._on_cancel,
+            fg_color="transparent",
+            border_width=1,
+            border_color=COLOR_BORDER,
+            hover_color=COLOR_SURFACE,
+            text_color=COLOR_TEXT_DIM,
+            font=("Roboto", 11, "bold"),
+            height=35
+        )
+        cancel_btn.pack(side="left", expand=True, fill="x", padx=(0, 5))
+        
+        # æ·‡æ¿†ç“¨éŽ¸å¤åž¥ (Filled)
+        save_btn = ctk.CTkButton(
+            button_frame,
+            text="SAVE",
+            command=self._on_save,
+            fg_color=COLOR_TEXT,
+            hover_color=COLOR_ACCENT_HOVER,
+            text_color=COLOR_BG,
+            font=("Roboto", 11, "bold"),
+            height=35
+        )
+        save_btn.pack(side="left", expand=True, fill="x", padx=(5, 0))
+
+    def _add_section_title(self, parent, text):
+        ctk.CTkLabel(
+            parent, 
+            text=text, 
+            font=("Roboto", 10, "bold"), 
+            text_color=COLOR_TEXT_DIM
+        ).pack(anchor="w", pady=(10, 5))
+
+    def _add_spacer(self):
+        ctk.CTkFrame(self.content_frame, height=1, fg_color="transparent").pack(fill="x", pady=6)
+
+    def _add_switch(self, parent, text, variable):
+        switch = ctk.CTkSwitch(
+            parent,
+            text=text,
+            variable=variable,
+            fg_color=COLOR_SURFACE,
+            progress_color=COLOR_ACCENT,
+            button_color=COLOR_ACCENT,
+            button_hover_color=COLOR_ACCENT_HOVER,
+            text_color=COLOR_TEXT,
+            font=("Roboto", 12)
+        )
+        switch.pack(anchor="w", pady=5)
+
+    def _add_grid_switch(self, parent, text, variable, row, col):
+        switch = ctk.CTkSwitch(
+            parent,
+            text=text,
+            variable=variable,
+            fg_color=COLOR_SURFACE,
+            progress_color=COLOR_ACCENT,
+            button_color=COLOR_ACCENT,
+            button_hover_color=COLOR_ACCENT_HOVER,
+            text_color=COLOR_TEXT,
+            font=("Roboto", 12)
+        )
+        switch.grid(row=row, column=col, sticky="w", pady=8, padx=5)
+    
+    def _on_save(self):
+        """æ·‡æ¿†ç“¨ç‘·î… ç–†"""
+        # é‡å­˜æŸŠé–°å¶‡ç–†
+        config.show_opencv_windows = self.show_opencv_var.get()
+        config.show_opencv_mask = self.show_opencv_mask_var.get()
+        config.show_opencv_detection = self.show_opencv_detection_var.get()
+        config.show_opencv_roi = self.show_opencv_roi_var.get()
+        config.show_opencv_triggerbot_mask = self.show_opencv_triggerbot_mask_var.get()
+        config.show_ndi_raw_stream_window = self.show_ndi_raw_stream_var.get()
+        config.show_udp_raw_stream_window = self.show_udp_raw_stream_var.get()
+        config.show_mode_text = self.show_mode_var.get()
+        config.show_aimbot_status = self.show_aimbot_status_var.get()
+        config.show_triggerbot_status = self.show_triggerbot_status_var.get()
+        config.show_target_count = self.show_target_count_var.get()
+        config.show_crosshair = self.show_crosshair_var.get()
+        config.show_distance_text = self.show_distance_var.get()
+        
+        # æ·‡æ¿†ç“¨é’ç‰ˆæžƒæµ ?
+        config.save_to_file()
+        
+        # é—‚æ»ˆæž†ç‘•æ «ç¥
+        self.destroy()
+    
+    def _on_cancel(self):
+        """é™æ ¨ç§·æ¶“ï¹‚æ£žé—?- æ¶“å¶„ç¹šç€›æ¨¹æ¢æµ£æ›Ÿæ´¿é€ç™¸ç´éŽ­ãˆ äº¬é˜ç†·îç‘·î… ç–†"""
+        self.destroy()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
