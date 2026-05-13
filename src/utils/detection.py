@@ -24,7 +24,6 @@ def load_model(model_path=None):
 
     try:
         log_print("Loading HSV parameters...")
-        # Wider HSV presets to better tolerate compression/lighting variance.
         yellow = [18, 80, 80, 40, 255, 255]
         purple = [125, 60, 80, 170, 255, 255]
         red = [0, 95, 95, 4, 235, 255]
@@ -128,10 +127,10 @@ def _boxes_should_merge(r1, r2, dist_threshold):
 
     a1 = max(1, _bbox_area(r1))
     a2 = max(1, _bbox_area(r2))
-    size_ratio = min(a1, a2) / max(a1, a2)
+    area_ratio = min(a1, a2) / max(a1, a2)
     # Merge mainly fragment-like splits; avoid merging similarly sized players.
-    small_fragment = size_ratio <= 0.80
-    if not small_fragment:
+    is_fragment = area_ratio <= 0.80
+    if not is_fragment:
         return False
 
     close_h = h_gap <= dist_threshold and v_overlap >= 0.60 * min(h1, h2)
@@ -144,8 +143,8 @@ def merge_close_rects(rects, centers, dist_threshold=None):
         dist_threshold = int(getattr(config, "detection_merge_distance", 12))
     dist_threshold = int(max(0, min(dist_threshold, 18)))
 
-    merged = []
-    merged_centers = []
+    output_rects = []
+    output_centers = []
     used = [False] * len(rects)
 
     for i, (r1, c1) in enumerate(zip(rects, centers)):
@@ -177,14 +176,14 @@ def merge_close_rects(rects, centers, dist_threshold=None):
         final_h = max(1, ny2 - ny1)
         final_cx = int(nx1 + final_w // 2)
         final_cy = int(ny1 + final_h // 2)
-        merged.append((nx1, ny1, final_w, final_h))
-        merged_centers.append((final_cx, final_cy))
+        output_rects.append((nx1, ny1, final_w, final_h))
+        output_centers.append((final_cx, final_cy))
 
-    sort_idx = sorted(range(len(merged)), key=lambda idx: _bbox_area(merged[idx]), reverse=True)
-    merged = [merged[idx] for idx in sort_idx]
-    merged_centers = [merged_centers[idx] for idx in sort_idx]
+    sort_idx = sorted(range(len(output_rects)), key=lambda idx: _bbox_area(output_rects[idx]), reverse=True)
+    output_rects = [output_rects[idx] for idx in sort_idx]
+    output_centers = [output_centers[idx] for idx in sort_idx]
 
-    return merged, merged_centers
+    return output_rects, output_centers
 
 
 def _is_split_mode_enabled():
@@ -252,7 +251,7 @@ def _split_blob_watershed(image, mask, rect, min_instance_area, dist_ratio):
     ws_input = roi_img if roi_img.ndim == 3 else cv2.cvtColor(roi_img, cv2.COLOR_GRAY2BGR)
     ws_markers = cv2.watershed(ws_input.copy(), markers)
 
-    sub_rects = []
+    found_rects = []
     for marker_id in np.unique(ws_markers):
         if marker_id <= 1:
             continue
@@ -267,17 +266,17 @@ def _split_blob_watershed(image, mask, rect, min_instance_area, dist_ratio):
         sx, sy, sw, sh = cv2.boundingRect(largest)
         if int(sw) <= 0 or int(sh) <= 0:
             continue
-        sub_rects.append((x0 + int(sx), y0 + int(sy), int(sw), int(sh), float(component_area)))
+        found_rects.append((x0 + int(sx), y0 + int(sy), int(sw), int(sh), float(component_area)))
 
-    if len(sub_rects) < 2:
+    if len(found_rects) < 2:
         return []
 
-    sub_rects.sort(key=lambda r: r[4], reverse=True)
-    deduped = []
-    for candidate in sub_rects:
-        cx, cy, cw, ch, _ = candidate
+    found_rects.sort(key=lambda r: r[4], reverse=True)
+    filtered_rects = []
+    for rect_candidate in found_rects:
+        cx, cy, cw, ch, _ = rect_candidate
         keep = True
-        for existing in deduped:
+        for existing in filtered_rects:
             ex, ey, ew, eh, _ = existing
             inter_w = max(0, min(cx + cw, ex + ew) - max(cx, ex))
             inter_h = max(0, min(cy + ch, ey + eh) - max(cy, ey))
@@ -287,9 +286,9 @@ def _split_blob_watershed(image, mask, rect, min_instance_area, dist_ratio):
                 keep = False
                 break
         if keep:
-            deduped.append(candidate)
+            filtered_rects.append(rect_candidate)
 
-    return deduped
+    return filtered_rects
 
 
 def _split_blob_projection(mask, rect, min_instance_area):
@@ -305,39 +304,39 @@ def _split_blob_projection(mask, rect, min_instance_area):
     if int(binary.sum()) < max(int(min_instance_area) * 2, 20):
         return []
 
-    col_sum = binary.sum(axis=0).astype(np.float32)
+    column_sum = binary.sum(axis=0).astype(np.float32)
     smooth_window = int(getattr(config, "detection_projection_smooth_window", 5))
     smooth_window = max(1, min(smooth_window, 13))
     if smooth_window % 2 == 0:
         smooth_window += 1
     if smooth_window > 1:
         kernel = np.ones((smooth_window,), dtype=np.float32) / float(smooth_window)
-        col_sum = np.convolve(col_sum, kernel, mode="same")
+        column_sum = np.convolve(column_sum, kernel, mode="same")
 
     gap_ratio = float(getattr(config, "detection_projection_gap_ratio", 0.08))
     gap_ratio = max(0.02, min(gap_ratio, 0.40))
     gap_threshold = max(1.0, float(h) * gap_ratio)
 
-    active = col_sum > gap_threshold
-    segments = []
+    active = column_sum > gap_threshold
+    col_segments = []
     start = None
     for idx, is_active in enumerate(active):
         if is_active and start is None:
             start = idx
         elif (not is_active) and start is not None:
-            segments.append((start, idx))
+            col_segments.append((start, idx))
             start = None
     if start is not None:
-        segments.append((start, int(w)))
+        col_segments.append((start, int(w)))
 
-    if len(segments) < 2:
+    if len(col_segments) < 2:
         return []
 
     min_segment_width = int(getattr(config, "detection_projection_min_segment_width", 3))
     min_segment_width = max(1, min(min_segment_width, max(2, int(w // 2))))
 
     sub_rects = []
-    for sx0, sx1 in segments:
+    for sx0, sx1 in col_segments:
         seg_w = int(sx1) - int(sx0)
         if seg_w < min_segment_width:
             continue
@@ -452,8 +451,8 @@ def perform_detection(model, image):
         min_contour_area = min(min_contour_area, max(10, int(frame_area * 0.00010)))
         min_fill_ratio = min(min_fill_ratio, 0.08)
 
-    contour_candidates = []
-    split_applied = False
+    candidate_list = []
+    did_split = False
     for c in contours:
         if len(c) < min_contour_points:
             # Keep simple but large contours (often rectangles) for split/fill checks.
@@ -470,12 +469,12 @@ def perform_detection(model, image):
             if len(split_rects) < 2:
                 split_rects = _split_blob_projection(raw_mask, (x, y, w, h), split_min_instance_area)
             if len(split_rects) >= 2:
-                split_applied = True
-                contour_candidates.extend(split_rects)
+                did_split = True
+                candidate_list.extend(split_rects)
                 continue
-        contour_candidates.append((int(x), int(y), int(w), int(h), float(contour_area)))
+        candidate_list.append((int(x), int(y), int(w), int(h), float(contour_area)))
 
-    for x, y, w, h, contour_area in contour_candidates:
+    for x, y, w, h, contour_area in candidate_list:
         bbox_area = int(w) * int(h)
         if contour_area < min_contour_area:
             continue
@@ -528,7 +527,7 @@ def perform_detection(model, image):
     centers = [rc[1] for rc in rects_centers]
 
     merge_after_split = bool(getattr(config, "detection_merge_after_split", False))
-    if split_applied and not merge_after_split:
+    if did_split and not merge_after_split:
         final_rects = rects
     else:
         final_rects, _ = merge_close_rects(rects, centers)
